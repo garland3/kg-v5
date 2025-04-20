@@ -1,0 +1,476 @@
+{% extends "base.html" %}
+
+{% block title %}Neo4j FastAPI Demo - Manage People{% endblock %}
+
+{% block head_styles %}
+<link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+<style>
+    .dataTables_wrapper .dataTables_paginate .paginate_button {
+        padding: 0.5em 1em;
+        margin-left: 2px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+    }
+    .dataTables_wrapper .dataTables_paginate .paginate_button.current {
+        background: #2a5298;
+        color: white !important;
+        border: 1px solid #2a5298;
+    }
+    .dataTables_wrapper .dataTables_paginate .paginate_button:hover {
+        background: #1e3c72;
+        color: white !important;
+        border: 1px solid #1e3c72;
+    }
+    .dataTables_wrapper .dataTables_length select {
+        width: auto;
+        display: inline-block;
+        margin: 0 5px;
+    }
+    .dataTables_wrapper .dataTables_filter input {
+        width: auto;
+        display: inline-block;
+        margin-left: 5px;
+    }
+    
+    /* Compact table styles */
+    #peopleTable td, #allRelationshipsTable td {
+        padding: 8px;
+        vertical-align: middle;
+    }
+    
+    /* Button styles */
+    .view-btn, .delete-btn {
+        width: auto;
+        padding: 5px 10px;
+        font-size: 0.9em;
+        margin: 0;
+        display: inline-block;
+    }
+    
+    /* Truncate long text */
+    #peopleTable td:nth-child(3) {
+        max-width: 300px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    
+    /* Show full text on hover */
+    #peopleTable td:nth-child(3):hover {
+        white-space: normal;
+        overflow: visible;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="container">
+        <!-- Person Form -->
+        <div class="card">
+            <h2>Add Person</h2>
+            <form id="personForm">
+                <input type="text" id="name" placeholder="Name" required>
+                <textarea id="description" placeholder="Description" required style="width: 100%; min-height: 100px; resize: vertical;"></textarea>
+                <button type="submit">Add Person</button>
+            </form>
+        </div>
+
+        <!-- Relationship Form -->
+        <div class="card">
+            <h2>Create Relationship</h2>
+            <form id="relationshipForm">
+                <label for="person1">Person 1:</label>
+                <select id="person1" required aria-label="Select first person">
+                    <option value="">Select Person 1</option>
+                </select>
+                <input type="text" id="relationshipType" placeholder="Relationship Type (e.g., KNOWS, WORKS_WITH)" required>
+                <label for="person2">Person 2:</label>
+                <select id="person2" required aria-label="Select second person">
+                    <option value="">Select Person 2</option>
+                </select>
+                <button type="submit">Create Relationship</button>
+            </form>
+        </div>
+    </div>
+
+<div class="card" style="margin-top: 2rem;">
+        <h2>People</h2>
+        <table id="peopleTable" class="display" style="width:100%">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Name</th>
+                    <th>Description</th>
+                    <th>Created By</th>
+                    <th>Created At</th>
+                    <th>Updated By</th>
+                    <th>Updated At</th>
+                    <th>View</th>
+                    <th>Delete</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div class="card" style="margin-top: 2rem;">
+        <h2>All Relationships</h2>
+        <table id="allRelationshipsTable" class="display" style="width:100%">
+            <thead>
+                <tr>
+                    <th>Source Person</th>
+                    <th>Relationship</th>
+                    <th>Target Person</th>
+                    <th>Created By</th>
+                    <th>Created At</th>
+                    <th>Updated By</th>
+                    <th>Updated At</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+<div id="relationshipsContainer" class="card hidden" style="margin-top: 2rem;">
+        <h2>Relationships</h2>
+        <div id="personDetails"></div>
+        <table id="relationshipsTable">
+            <thead>
+                <tr>
+                    <th>Related Person</th>
+                    <th>Relationship</th>
+                    <th>Direction</th>
+                    <th>Created By</th>
+                    <th>Created At</th>
+                    <th>Updated By</th>
+                    <th>Updated At</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+        <button id="backButton" style="margin-top: 1rem;">Back to People List</button>
+    </div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script>
+        // DOM elements
+        const personForm = document.getElementById('personForm');
+        const relationshipForm = document.getElementById('relationshipForm');
+        const person1Select = document.getElementById('person1');
+        const person2Select = document.getElementById('person2');
+        const relationshipsContainer = document.getElementById('relationshipsContainer');
+        const relationshipsTable = document.getElementById('relationshipsTable').querySelector('tbody');
+        const personDetails = document.getElementById('personDetails');
+        const backButton = document.getElementById('backButton');
+        const messageDiv = document.getElementById('message');
+        
+        // DataTables instances
+        let peopleDataTable;
+        let relationshipsDataTable;
+
+        // API base URL
+        const API_BASE_URL = '/api';
+
+        // Show message
+        function showMessage(message, type) {
+            messageDiv.textContent = message;
+            messageDiv.className = `message ${type}`;
+            setTimeout(() => {
+                messageDiv.className = 'message hidden';
+            }, 3000);
+        }
+
+        // Initialize DataTables
+        function initDataTables() {
+            // People DataTable
+            peopleDataTable = $('#peopleTable').DataTable({
+                processing: true,
+                serverSide: false, // We'll handle server-side pagination manually
+                paging: true,
+                searching: true,
+                ordering: true,
+                info: true,
+                pageLength: 10,
+                lengthMenu: [5, 10, 25, 50],
+                columns: [
+                    { data: 'id', width: '5%' },
+                    { data: 'name', width: '10%' },
+                    { data: 'description', width: '20%' },
+                    { data: 'created_by', width: '10%' },
+                    { data: 'created_at', width: '10%' },
+                    { data: 'updated_by', width: '10%' },
+                    { data: 'updated_at', width: '10%' },
+                    { 
+                        data: null,
+                        orderable: false,
+                        width: '10%',
+                        render: function(data, type, row) {
+                            return `<button class="view-btn" data-id="${row.id}" data-name="${row.name}">View</button>`;
+                        }
+                    },
+                    {
+                        data: null,
+                        orderable: false,
+                        width: '10%',
+                        render: function(data, type, row) {
+                            return `<button class="delete-btn" data-id="${row.id}">Delete</button>`;
+                        }
+                    }
+                ],
+                language: {
+                    emptyTable: "No people found"
+                }
+            });
+
+            // Relationships DataTable
+            relationshipsDataTable = $('#allRelationshipsTable').DataTable({
+                processing: true,
+                serverSide: false, // We'll handle server-side pagination manually
+                paging: true,
+                searching: true,
+                ordering: true,
+                info: true,
+                pageLength: 10,
+                lengthMenu: [5, 10, 25, 50],
+                columns: [
+                    { data: 'source_name', width: '15%' },
+                    { data: 'relationship_type', width: '15%' },
+                    { data: 'target_name', width: '15%' },
+                    { data: 'created_by', width: '10%' },
+                    { data: 'created_at', width: '10%' },
+                    { data: 'updated_by', width: '10%' },
+                    { data: 'updated_at', width: '10%' }
+                ],
+                language: {
+                    emptyTable: "No relationships found"
+                }
+            });
+
+            // Add event listeners for buttons in DataTable
+            $('#peopleTable').on('click', '.view-btn', function() {
+                const id = $(this).data('id');
+                const name = $(this).data('name');
+                viewRelationships(id, name);
+            });
+
+            $('#peopleTable').on('click', '.delete-btn', function() {
+                const id = $(this).data('id');
+                deletePerson(id);
+            });
+        }
+
+        // Load all people for dropdowns
+        async function loadPeopleForDropdowns() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/people/?limit=1000`); // Get all people for dropdowns
+                const data = await response.json();
+                const people = data.items;
+                
+                // Update the select dropdowns
+                person1Select.innerHTML = '<option value="">Select Person 1</option>';
+                person2Select.innerHTML = '<option value="">Select Person 2</option>';
+                
+                people.forEach(person => {
+                    // Add to dropdowns
+                    const option = document.createElement('option');
+                    option.value = person.id;
+                    option.textContent = person.name;
+                    person1Select.appendChild(option.cloneNode(true));
+                    person2Select.appendChild(option.cloneNode(true));
+                });
+            } catch (error) {
+                console.error('Error loading people for dropdowns:', error);
+                showMessage('Error loading people for dropdowns', 'error');
+            }
+        }
+
+        // Load people with DataTables
+        async function loadPeople() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/people/?limit=1000`); // Get all for initial load
+                const data = await response.json();
+                
+                // Clear existing data and add new data
+                peopleDataTable.clear();
+                peopleDataTable.rows.add(data.items);
+                peopleDataTable.draw();
+                
+                // Also update dropdowns
+                loadPeopleForDropdowns();
+            } catch (error) {
+                console.error('Error loading people:', error);
+                showMessage('Error loading people', 'error');
+            }
+        }
+
+        // Create a new person
+        personForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const personData = {
+                name: document.getElementById('name').value,
+                description: document.getElementById('description').value
+            };
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/people/`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(personData)
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to create person');
+                }
+                
+                const result = await response.json();
+                showMessage(`Successfully added ${result.name}`, 'success');
+                personForm.reset();
+                loadPeople();
+            } catch (error) {
+                console.error('Error creating person:', error);
+                showMessage('Error creating person', 'error');
+            }
+        });
+
+        // Create a relationship
+        relationshipForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const relationshipData = {
+                person1_id: document.getElementById('person1').value,
+                person2_id: document.getElementById('person2').value,
+                relationship_type: document.getElementById('relationshipType').value
+            };
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/relationships/`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(relationshipData)
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to create relationship');
+                }
+                
+                const result = await response.json();
+                showMessage(result.message, 'success');
+                relationshipForm.reset();
+                
+                // Refresh the all relationships table
+                loadAllRelationships();
+            } catch (error) {
+                console.error('Error creating relationship:', error);
+                showMessage('Error creating relationship', 'error');
+            }
+        });
+
+        // View relationships for a person
+        async function viewRelationships(personId, personName) {
+            try {
+                const response = await fetch(`${API_BASE_URL}/people/${personId}/relationships`);
+                const relationships = await response.json();
+                
+                // Update the table
+                relationshipsTable.innerHTML = '';
+                personDetails.innerHTML = `<h3>Relationships for ${personName}</h3>`;
+                
+                if (relationships.length === 0) {
+                    const row = document.createElement('tr');
+                    row.innerHTML = '<td colspan="7">No relationships found</td>';
+                    relationshipsTable.appendChild(row);
+                } else {
+                    relationships.forEach(rel => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${rel.related_person_name}</td>
+                            <td>${rel.relationship_type}</td>
+                            <td>${rel.direction}</td>
+                            <td>${rel.created_by || ''}</td>
+                            <td>${rel.created_at || ''}</td>
+                            <td>${rel.updated_by || ''}</td>
+                            <td>${rel.updated_at || ''}</td>
+                        `;
+                        relationshipsTable.appendChild(row);
+                    });
+                }
+                
+                // Show the relationships view, hide the people table
+                relationshipsContainer.classList.remove('hidden');
+                document.querySelector('.card:has(#peopleTable)').classList.add('hidden');
+            } catch (error) {
+                console.error('Error loading relationships:', error);
+                showMessage('Error loading relationships', 'error');
+            }
+        }
+
+        // Delete a person
+        async function deletePerson(personId) {
+            if (!confirm('Are you sure you want to delete this person?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/people/${personId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to delete person');
+                }
+                
+                const result = await response.json();
+                showMessage(result.message, 'success');
+                loadPeople();
+                
+                // Refresh the all relationships table since deleting a person also deletes their relationships
+                loadAllRelationships();
+            } catch (error) {
+                console.error('Error deleting person:', error);
+                showMessage('Error deleting person', 'error');
+            }
+        }
+
+        // Back button
+        backButton.addEventListener('click', () => {
+            relationshipsContainer.classList.add('hidden');
+            document.querySelector('.card:has(#peopleTable)').classList.remove('hidden');
+        });
+
+        // Load all relationships with DataTables
+        async function loadAllRelationships() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/relationships/?limit=1000`); // Get all for initial load
+                const data = await response.json();
+                
+                // Clear existing data and add new data
+                relationshipsDataTable.clear();
+                relationshipsDataTable.rows.add(data.items);
+                relationshipsDataTable.draw();
+            } catch (error) {
+                console.error('Error loading relationships:', error);
+                showMessage('Error loading relationships', 'error');
+            }
+        }
+
+        // Load people and relationships on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            // Initialize DataTables
+            initDataTables();
+            
+            // Load data
+            loadPeople();
+            loadAllRelationships();
+        });
+</script>
+{% endblock %}

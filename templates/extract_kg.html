@@ -1,0 +1,522 @@
+{% extends "base.html" %}
+
+{% block title %}Neo4j FastAPI Demo - Knowledge Graph Extraction{% endblock %}
+
+{% block head_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.2/dist/vis-network.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/vis-data@7.1.4/dist/vis-data.min.js"></script>
+{% endblock %}
+
+{% block head_styles %}
+<style>
+        .textarea-container {
+            position: relative;
+        }
+        
+        textarea {
+            width: 100%;
+            min-height: 200px;
+            padding: 0.7rem;
+            margin-bottom: 1rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+            resize: vertical;
+        }
+        
+        .spinner {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 50px;
+            height: 50px;
+            border: 5px solid rgba(0, 0, 0, 0.1);
+            border-radius: 50%;
+            border-top-color: #2a5298;
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: translate(-50%, -50%) rotate(360deg); }
+        }
+        
+        .processing .spinner {
+            display: block;
+        }
+        
+        .processing textarea {
+            opacity: 0.5;
+        }
+        
+        .preview-container {
+            display: none;
+            margin-top: 2rem;
+        }
+        
+        .preview-graph {
+            width: 100%;
+            height: 400px;
+            background-color: white;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            margin-bottom: 1rem;
+        }
+        
+        .entity-list, .relationship-list {
+            max-height: 300px;
+            overflow-y: auto;
+            margin-bottom: 1rem;
+        }
+        
+        .approval-buttons {
+            display: flex;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        
+        .approve-btn {
+            background-color: #27ae60;
+        }
+        
+        .approve-btn:hover {
+            background-color: #219653;
+        }
+        
+        .reject-btn {
+            background-color: #e74c3c;
+        }
+        
+        .reject-btn:hover {
+            background-color: #c0392b;
+        }
+        
+        .file-upload {
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid #ddd;
+        }
+        
+        .or-divider {
+            text-align: center;
+            margin: 1rem 0;
+            position: relative;
+        }
+        
+        .or-divider::before {
+            content: "";
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background-color: #ddd;
+            z-index: 0;
+        }
+        
+        .or-divider span {
+            background-color: white;
+            padding: 0 1rem;
+            position: relative;
+            z-index: 1;
+        }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="card">
+        <h2>Extract Knowledge Graph</h2>
+        <p>Enter text below to extract a knowledge graph of people and their relationships. The system will identify people mentioned in the text and the relationships between them.</p>
+        
+        <form id="extractForm">
+            <div class="textarea-container">
+                <textarea id="textInput" placeholder="Enter your text here..." required></textarea>
+                <div class="spinner"></div>
+            </div>
+            <button type="submit" id="extractButton">Extract Knowledge Graph</button>
+        </form>
+        
+        <div class="or-divider">
+            <span>OR</span>
+        </div>
+        
+        <div class="file-upload">
+            <h3>Upload a Text File</h3>
+            <form id="fileUploadForm" enctype="multipart/form-data">
+                <label for="fileInput">Select a text file:</label>
+                <input type="file" id="fileInput" accept=".txt" required aria-label="Select a text file">
+                <button type="submit" id="uploadButton">Upload and Extract</button>
+            </form>
+        </div>
+    </div>
+
+<div id="previewContainer" class="card preview-container">
+        <h2>Knowledge Graph Preview</h2>
+        <p>Review the extracted knowledge graph before adding it to the database.</p>
+        
+        <div class="preview-graph" id="previewGraph"></div>
+        
+        <div class="container">
+            <div class="card">
+                <h3>Entities (People)</h3>
+                <div class="entity-list" id="entityList"></div>
+            </div>
+            
+            <div class="card">
+                <h3>Relationships</h3>
+                <div class="relationship-list" id="relationshipList"></div>
+            </div>
+        </div>
+        
+        <div class="approval-buttons">
+            <button id="approveButton" class="approve-btn">Approve and Add to Database</button>
+            <button id="rejectButton" class="reject-btn">Reject</button>
+        </div>
+    </div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+        // DOM elements
+        const extractForm = document.getElementById('extractForm');
+        const fileUploadForm = document.getElementById('fileUploadForm');
+        const textInput = document.getElementById('textInput');
+        const fileInput = document.getElementById('fileInput');
+        const extractButton = document.getElementById('extractButton');
+        const uploadButton = document.getElementById('uploadButton');
+        const previewContainer = document.getElementById('previewContainer');
+        const previewGraph = document.getElementById('previewGraph');
+        const entityList = document.getElementById('entityList');
+        const relationshipList = document.getElementById('relationshipList');
+        const approveButton = document.getElementById('approveButton');
+        const rejectButton = document.getElementById('rejectButton');
+        const messageDiv = document.getElementById('message');
+        
+        // API base URL
+        const API_BASE_URL = '/api';
+        
+        // Current extracted knowledge graph
+        let currentKG = null;
+        
+        // Show message
+        function showMessage(message, type) {
+            messageDiv.textContent = message;
+            messageDiv.className = `message ${type}`;
+            setTimeout(() => {
+                messageDiv.className = 'message hidden';
+            }, 3000);
+        }
+        
+        // Set loading state
+        function setLoading(isLoading) {
+            const container = document.querySelector('.textarea-container');
+            if (isLoading) {
+                container.classList.add('processing');
+                extractButton.disabled = true;
+                uploadButton.disabled = true;
+                extractButton.textContent = 'Processing...';
+                uploadButton.textContent = 'Processing...';
+            } else {
+                container.classList.remove('processing');
+                extractButton.disabled = false;
+                uploadButton.disabled = false;
+                extractButton.textContent = 'Extract Knowledge Graph';
+                uploadButton.textContent = 'Upload and Extract';
+            }
+        }
+        
+        // Extract knowledge graph from text
+        async function extractKnowledgeGraph(text) {
+            setLoading(true);
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/kg/extract`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ text })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to extract knowledge graph');
+                }
+                
+                const result = await response.json();
+                
+                // Store the current KG for later use
+                currentKG = {
+                    entities: result.entities,
+                    relationships: result.relationships
+                };
+                
+                // Display the preview
+                displayPreview(currentKG);
+                
+                showMessage('Knowledge graph extracted successfully', 'success');
+            } catch (error) {
+                console.error('Error extracting knowledge graph:', error);
+                showMessage('Error extracting knowledge graph', 'error');
+            } finally {
+                setLoading(false);
+            }
+        }
+        
+        // Upload file and extract knowledge graph
+        async function uploadFileAndExtract(file) {
+            setLoading(true);
+            
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                const response = await fetch(`${API_BASE_URL}/kg/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to process file');
+                }
+                
+                const result = await response.json();
+                
+                // Store the current KG for later use
+                currentKG = {
+                    entities: result.entities,
+                    relationships: result.relationships
+                };
+                
+                // Display the preview
+                displayPreview(currentKG);
+                
+                showMessage('File processed successfully', 'success');
+            } catch (error) {
+                console.error('Error processing file:', error);
+                showMessage('Error processing file', 'error');
+            } finally {
+                setLoading(false);
+            }
+        }
+        
+        // Display the knowledge graph preview
+        function displayPreview(kg) {
+            // Show the preview container
+            previewContainer.style.display = 'block';
+            
+            // Display entities
+            entityList.innerHTML = '';
+            if (kg.entities.length === 0) {
+                entityList.innerHTML = '<p>No entities found</p>';
+            } else {
+                const entityTable = document.createElement('table');
+                entityTable.innerHTML = `
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Name</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                `;
+                
+                const tbody = entityTable.querySelector('tbody');
+                kg.entities.forEach(entity => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${entity.entity_id}</td>
+                        <td>${entity.label}</td>
+                        <td>${entity.description}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+                
+                entityList.appendChild(entityTable);
+            }
+            
+            // Display relationships
+            relationshipList.innerHTML = '';
+            if (kg.relationships.length === 0) {
+                relationshipList.innerHTML = '<p>No relationships found</p>';
+            } else {
+                const relationshipTable = document.createElement('table');
+                relationshipTable.innerHTML = `
+                    <thead>
+                        <tr>
+                            <th>Source</th>
+                            <th>Relationship</th>
+                            <th>Target</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                `;
+                
+                const tbody = relationshipTable.querySelector('tbody');
+                kg.relationships.forEach(rel => {
+                    // Find the source and target entity labels
+                    const sourceEntity = kg.entities.find(e => e.entity_id === rel.source_id);
+                    const targetEntity = kg.entities.find(e => e.entity_id === rel.target_id);
+                    
+                    if (sourceEntity && targetEntity) {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${sourceEntity.label}</td>
+                            <td>${rel.label}</td>
+                            <td>${targetEntity.label}</td>
+                        `;
+                        tbody.appendChild(row);
+                    }
+                });
+                
+                relationshipList.appendChild(relationshipTable);
+            }
+            
+            // Visualize the graph
+            visualizeGraph(kg);
+        }
+        
+        // Visualize the knowledge graph
+        function visualizeGraph(kg) {
+            // Create nodes array
+            const nodes = new vis.DataSet(
+                kg.entities.map(entity => ({
+                    id: entity.entity_id,
+                    label: entity.label,
+                    title: `${entity.label}<br>${entity.description}`,
+                    shape: 'dot',
+                    size: 10,
+                    color: {
+                        background: '#3498db',
+                        border: '#2980b9',
+                        highlight: {
+                            background: '#2ecc71',
+                            border: '#27ae60'
+                        }
+                    }
+                }))
+            );
+            
+            // Create edges array
+            const edges = new vis.DataSet(
+                kg.relationships.map(rel => ({
+                    from: rel.source_id,
+                    to: rel.target_id,
+                    label: rel.label,
+                    arrows: 'to',
+                    color: {
+                        color: '#e74c3c',
+                        highlight: '#c0392b'
+                    },
+                    font: {
+                        align: 'middle',
+                        size: 10
+                    }
+                }))
+            );
+            
+            // Create network
+            const data = { nodes, edges };
+            const options = {
+                nodes: {
+                    font: {
+                        size: 14
+                    }
+                },
+                edges: {
+                    smooth: {
+                        type: 'continuous'
+                    }
+                },
+                physics: {
+                    stabilization: true,
+                    barnesHut: {
+                        gravitationalConstant: -2000,
+                        centralGravity: 0.1,
+                        springLength: 150,
+                        springConstant: 0.04
+                    }
+                },
+                interaction: {
+                    hover: true,
+                    tooltipDelay: 200
+                }
+            };
+            
+            // Clear previous network
+            previewGraph.innerHTML = '';
+            
+            // Create new network
+            const network = new vis.Network(previewGraph, data, options);
+        }
+        
+        // Approve and add to database
+        async function approveAndAddToDatabase() {
+            if (!currentKG) {
+                showMessage('No knowledge graph to approve', 'error');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/kg/store`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(currentKG)
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to store knowledge graph');
+                }
+                
+                const result = await response.json();
+                
+                showMessage('Knowledge graph added to database successfully', 'success');
+                
+                // Reset the form and hide the preview
+                extractForm.reset();
+                fileUploadForm.reset();
+                previewContainer.style.display = 'none';
+                currentKG = null;
+            } catch (error) {
+                console.error('Error storing knowledge graph:', error);
+                showMessage('Error storing knowledge graph', 'error');
+            }
+        }
+        
+        // Reject the knowledge graph
+        function rejectKnowledgeGraph() {
+            // Reset the form and hide the preview
+            extractForm.reset();
+            fileUploadForm.reset();
+            previewContainer.style.display = 'none';
+            currentKG = null;
+            
+            showMessage('Knowledge graph rejected', 'success');
+        }
+        
+        // Event listeners
+        extractForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const text = textInput.value.trim();
+            if (text) {
+                await extractKnowledgeGraph(text);
+            }
+        });
+        
+        fileUploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const file = fileInput.files[0];
+            if (file) {
+                await uploadFileAndExtract(file);
+            }
+        });
+        
+        approveButton.addEventListener('click', approveAndAddToDatabase);
+        rejectButton.addEventListener('click', rejectKnowledgeGraph);
+</script>
+{% endblock %}

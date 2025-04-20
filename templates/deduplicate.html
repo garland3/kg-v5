@@ -1,0 +1,332 @@
+{% extends "base.html" %}
+
+{% block title %}Entity Deduplication{% endblock %}
+
+{% block head_styles %}
+<style>
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        .confidence-high {
+            color: #2c7a2c;
+            font-weight: bold;
+        }
+        .confidence-medium {
+            color: #d18f00;
+            font-weight: bold;
+        }
+        .confidence-low {
+            color: #888;
+        }
+        .reasoning {
+            font-style: italic;
+            color: #555;
+            max-width: 300px;
+        }
+        .actions {
+            margin-top: 20px;
+            display: flex;
+            justify-content: space-between;
+        }
+        .checkbox-cell {
+            text-align: center;
+        }
+        .no-duplicates {
+            padding: 20px;
+            text-align: center;
+            background-color: #f0f0f0;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .submit-btn {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .submit-btn:hover {
+            background-color: #45a049;
+        }
+        .back-btn {
+            background-color: #f0f0f0;
+            color: #333;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .back-btn:hover {
+            background-color: #e0e0e0;
+        }
+        /* Spinner styles */
+        .spinner-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+            text-align: center;
+        }
+        .spinner {
+            border: 6px solid #f3f3f3;
+            border-top: 6px solid #3498db;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 2s linear infinite;
+            margin-bottom: 20px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .hidden {
+            display: none;
+        }
+        .error-message {
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+        }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1>Entity Deduplication</h1>
+        
+        <div class="description">
+            <p>The system will identify potential duplicate entities in the knowledge graph. 
+               Review the suggestions below and select which duplicates to merge.</p>
+        </div>
+        
+        {% if success %}
+            <div class="success-message" style="background-color: #d4edda; color: #155724; padding: 15px; margin-bottom: 20px; border-radius: 5px;">
+                <p>{{ message }}</p>
+                <p><a href="/deduplicate" class="back-btn">Check for more duplicates</a></p>
+            </div>
+        {% elif message %}
+            <div class="message" style="background-color: #cce5ff; color: #004085; padding: 15px; margin-bottom: 20px; border-radius: 5px;">
+                <p>{{ message }}</p>
+            </div>
+        {% endif %}
+        
+        <!-- Loading spinner -->
+        <div id="spinner-container" class="spinner-container">
+            <div class="spinner"></div>
+            <p>Analyzing entities for duplicates...</p>
+            <p><small>This may take a minute as we use AI to identify potential duplicates.</small></p>
+        </div>
+        
+        <!-- Error message container -->
+        <div id="error-container" class="error-message hidden">
+            <p id="error-message">An error occurred while finding duplicates.</p>
+            <button onclick="fetchDuplicates()" class="submit-btn">Try Again</button>
+        </div>
+        
+        <!-- Results container -->
+        <div id="results-container" class="hidden">
+            <form id="merge-form" action="/api/kg/merge" method="post" aria-label="Duplicate entities merge form">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Merge</th>
+                            <th>Entity 1</th>
+                            <th>Entity 2</th>
+                            <th>Confidence</th>
+                            <th>Reasoning</th>
+                        </tr>
+                    </thead>
+                    <tbody id="results-table-body">
+                        <!-- Results will be populated here by JavaScript -->
+                    </tbody>
+                </table>
+                
+                <div class="actions">
+                    <a href="/" class="back-btn">Cancel</a>
+                    <button type="submit" class="submit-btn">Merge Selected Duplicates</button>
+                </div>
+            </form>
+        </div>
+        
+        <!-- No duplicates message -->
+        <div id="no-duplicates-container" class="no-duplicates hidden">
+            <p>No potential duplicates were found in the database.</p>
+            <a href="/" class="back-btn">Back to Home</a>
+        </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+        // Function to fetch duplicates from the API
+        async function fetchDuplicates() {
+            // Show spinner, hide results and error
+            document.getElementById('spinner-container').classList.remove('hidden');
+            document.getElementById('results-container').classList.add('hidden');
+            document.getElementById('no-duplicates-container').classList.add('hidden');
+            document.getElementById('error-container').classList.add('hidden');
+            
+            try {
+                // Get the limit from URL query parameter or use default
+                const urlParams = new URLSearchParams(window.location.search);
+                const limit = urlParams.get('limit') || 100;
+                
+                // Call the API
+                const response = await fetch('/api/kg/deduplicate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ limit: parseInt(limit) })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`API error: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                // Hide spinner
+                document.getElementById('spinner-container').classList.add('hidden');
+                
+                // Check if we found any duplicates
+                if (data.duplicates && data.duplicates.length > 0) {
+                    // Populate the results table
+                    const tableBody = document.getElementById('results-table-body');
+                    tableBody.innerHTML = '';
+                    
+                    data.duplicates.forEach(duplicate => {
+                        const row = document.createElement('tr');
+                        
+                        // Determine confidence class
+                        let confidenceClass = 'confidence-low';
+                        if (duplicate.confidence_score >= 7) {
+                            confidenceClass = 'confidence-high';
+                        } else if (duplicate.confidence_score >= 4) {
+                            confidenceClass = 'confidence-medium';
+                        }
+                        
+                        row.innerHTML = `
+                            <td class="checkbox-cell">
+                                <input type="checkbox" id="merge_${duplicate.entity1_id}_${duplicate.entity2_id}" 
+                                       name="merge_pairs" value="${duplicate.entity1_id}|${duplicate.entity2_id}" 
+                                       checked aria-label="Merge ${duplicate.entity1_name} with ${duplicate.entity2_name}">
+                            </td>
+                            <td>
+                                <strong>${duplicate.entity1_name}</strong><br>
+                                <small>ID: ${duplicate.entity1_id}</small>
+                            </td>
+                            <td>
+                                <strong>${duplicate.entity2_name}</strong><br>
+                                <small>ID: ${duplicate.entity2_id}</small>
+                            </td>
+                            <td>
+                                <span class="${confidenceClass}">${duplicate.confidence_score}/10</span>
+                            </td>
+                            <td class="reasoning">
+                                ${duplicate.reasoning}
+                            </td>
+                        `;
+                        
+                        tableBody.appendChild(row);
+                    });
+                    
+                    // Show results
+                    document.getElementById('results-container').classList.remove('hidden');
+                } else {
+                    // Show no duplicates message
+                    document.getElementById('no-duplicates-container').classList.remove('hidden');
+                }
+            } catch (error) {
+                console.error('Error fetching duplicates:', error);
+                
+                // Hide spinner
+                document.getElementById('spinner-container').classList.add('hidden');
+                
+                // Show error message
+                document.getElementById('error-message').textContent = `Error finding duplicates: ${error.message}`;
+                document.getElementById('error-container').classList.remove('hidden');
+            }
+        }
+        
+        // Handle form submission
+        document.getElementById('merge-form').addEventListener('submit', function(event) {
+            event.preventDefault();
+            
+            // Get all checked checkboxes
+            const checkedBoxes = document.querySelectorAll('input[name="merge_pairs"]:checked');
+            
+            if (checkedBoxes.length === 0) {
+                alert('Please select at least one pair to merge');
+                return;
+            }
+            
+            // Process each checked pair
+            const promises = [];
+            
+            checkedBoxes.forEach(checkbox => {
+                const [entity1_id, entity2_id] = checkbox.value.split('|');
+                
+                // Create form data
+                const formData = new FormData();
+                formData.append('entity_id', entity1_id);
+                formData.append('duplicate_id', entity2_id);
+                
+                // Send merge request
+                const promise = fetch('/api/kg/merge', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                promises.push(promise);
+            });
+            
+            // Wait for all merges to complete
+            Promise.all(promises)
+                .then(responses => {
+                    // Check if all responses are ok
+                    const allOk = responses.every(response => response.ok);
+                    
+                    if (allOk) {
+                        // Redirect to success page or refresh
+                        window.location.href = '/deduplicate?success=true';
+                    } else {
+                        // Show error
+                        document.getElementById('error-message').textContent = 'Error merging some entities';
+                        document.getElementById('error-container').classList.remove('hidden');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error merging entities:', error);
+                    document.getElementById('error-message').textContent = `Error merging entities: ${error.message}`;
+                    document.getElementById('error-container').classList.remove('hidden');
+                });
+        });
+        
+        // Fetch duplicates when the page loads
+        document.addEventListener('DOMContentLoaded', fetchDuplicates);
+</script>
+{% endblock %}

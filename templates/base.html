@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Neo4j FastAPI Demo{% endblock %}</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    {% block head_scripts %}{% endblock %}
+    {% block head_styles %}{% endblock %}
+</head>
+<body>
+<header>
+        <h1>Neo4j FastAPI Demo</h1>
+        <div class="user-info">
+            <p>Current User: {{ user_email }}</p>
+        </div>
+        <nav>
+            <a href="/">Manage People</a>
+            <a href="/visualize">Graph Visualization</a>
+            <a href="/extract-kg">Extract Knowledge Graph</a>
+            <a href="/deduplicate">Deduplicate Entities</a>
+        </nav>
+    </header>
+
+    <div id="message" class="message hidden"></div>
+
+    {% block content %}{% endblock %}
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+
+{% block title %}Neo4j FastAPI Demo - Graph Visualization{% endblock %}
+
+{% block head_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.2/dist/vis-network.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/vis-data@7.1.4/dist/vis-data.min.js"></script>
+{% endblock %}
+
+{% block content %}
+
+<div class="controls">
+        <button id="refreshGraph">Refresh Graph</button>
+    </div>
+
+<div id="graph-container"></div>
+
+<div class="card">
+        <h2>Graph Legend</h2>
+        <p><strong>Nodes:</strong> Represent people in the database</p>
+        <p><strong>Edges:</strong> Represent relationships between people (hover over to see relationship type)</p>
+        <p><strong>Interactions:</strong></p>
+        <ul>
+            <li>Drag nodes to rearrange the graph</li>
+            <li>Scroll to zoom in/out</li>
+            <li>Click on a node to see its details</li>
+        </ul>
+    </div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+        // DOM elements
+        const graphContainer = document.getElementById('graph-container');
+        const refreshButton = document.getElementById('refreshGraph');
+        const messageDiv = document.getElementById('message');
+
+        // API base URL
+        const API_BASE_URL = '/api';
+
+        // Show message
+        function showMessage(message, type) {
+            messageDiv.textContent = message;
+            messageDiv.className = `message ${type}`;
+            setTimeout(() => {
+                messageDiv.className = 'message hidden';
+            }, 3000);
+        }
+
+        // Load and visualize the graph
+        async function loadGraph() {
+            try {
+                // Get all people using the non-paginated endpoint
+                const peopleResponse = await fetch(`${API_BASE_URL}/people/all/`);
+                const people = await peopleResponse.json();
+                
+                // Create nodes array
+                const nodes = new vis.DataSet(
+                    people.map(person => ({
+                        id: person.id,
+                        label: person.name,
+                        title: `Name: ${person.name}<br>Description: ${person.description || 'N/A'}`,
+                        shape: 'dot',
+                        size: 10,
+                        color: {
+                            background: '#3498db',
+                            border: '#2980b9',
+                            highlight: {
+                                background: '#2ecc71',
+                                border: '#27ae60'
+                            }
+                        }
+                    }))
+                );
+                
+                // Create edges array
+                const edges = new vis.DataSet();
+                
+                // For each person, get their relationships
+                for (const person of people) {
+                    try {
+                        const relResponse = await fetch(`${API_BASE_URL}/people/${person.id}/relationships`);
+                        const relationships = await relResponse.json();
+                        
+                        // Add edges for each relationship
+                        relationships.forEach(rel => {
+                            const edgeId = [person.id, rel.related_person_id].sort().join('-');
+                            if (!edges.get(edgeId)) {
+                                edges.add({
+                                    id: edgeId,
+                                    from: person.id,
+                                    to: rel.related_person_id,
+                                    label: rel.relationship_type,
+                                    arrows: {
+                                        to: {
+                                            enabled: true,
+                                            type: 'arrow'
+                                        },
+                                        from: {
+                                            enabled: true,
+                                            type: 'arrow'
+                                        }
+                                    },
+                                    color: {
+                                        color: '#e74c3c',
+                                        highlight: '#c0392b'
+                                    },
+                                    font: {
+                                        align: 'middle',
+                                        size: 10
+                                    }
+                                });
+                            }
+                        });
+                    } catch (error) {
+                        console.error(`Error loading relationships for person ${person.id}:`, error);
+                    }
+                }
+                
+                // Create network
+                const data = { nodes, edges };
+                const options = {
+                    nodes: {
+                        font: {
+                            size: 14
+                        }
+                    },
+                    edges: {
+                        smooth: {
+                            type: 'continuous'
+                        }
+                    },
+                    physics: {
+                        stabilization: true,
+                        barnesHut: {
+                            gravitationalConstant: -2000,
+                            centralGravity: 0.1,
+                            springLength: 150,
+                            springConstant: 0.04
+                        }
+                    },
+                    interaction: {
+                        hover: true,
+                        tooltipDelay: 200
+                    }
+                };
+                
+                // Clear previous network
+                graphContainer.innerHTML = '';
+                
+                // Create new network
+                const network = new vis.Network(graphContainer, data, options);
+                
+                showMessage('Graph loaded successfully', 'success');
+            } catch (error) {
+                console.error('Error loading graph:', error);
+                showMessage('Error loading graph', 'error');
+            }
+        }
+
+        // Refresh button
+        refreshButton.addEventListener('click', loadGraph);
+
+        // Load graph on page load
+        document.addEventListener('DOMContentLoaded', loadGraph);
+</script>
+{% endblock %}
