@@ -3,6 +3,7 @@ import os
 import logging
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
+from app.utils.llm import get_llm_client
 from openai import OpenAI
 from neo4j import GraphDatabase
 # from dotenv import load_dotenv
@@ -15,8 +16,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-if not os.getenv("OPENAI_API_KEY"):
+# (Replaced by get_llm_client for completions and embeddings)
+client = get_llm_client()
+if not os.getenv("OPENAI_API_KEY") and os.getenv("USE_OPENAI", "1").lower() in ("1", "true", "yes"):
     logger.warning("OPENAI_API_KEY environment variable not set. OpenAI calls will fail.")
 
 # Get model from environment
@@ -59,11 +61,8 @@ async def batch_generate_embeddings(project_id: Optional[int] = None, batch_size
                     entity_id = entity["id"]
                     text = f"{entity['name'] or ''} - {entity['description'] or ''}"
                     try:
-                        response = client.embeddings.create(
-                            input=text,
-                            model=embedding_model
-                        )
-                        embedding = response.data[0].embedding
+                        # Use the LLM abstraction for embeddings (supports OpenAI and vLLM)
+                        embedding = client.embed_texts([text], model_name=embedding_model)[0]
                         session.run(
                             """
                             MATCH (p:Person) WHERE ID(p) = $entity_id
@@ -206,7 +205,7 @@ async def confirm_duplicates_with_openai_per_entity(
     For a single entity and its candidate list, ask OpenAI which candidates are duplicates of the entity.
     """
     from tqdm import tqdm
-    client = OpenAI(api_key=openai_api_key)
+    client = get_llm_client()
     confirmed = []
 
     if not candidates:
@@ -239,16 +238,16 @@ async def confirm_duplicates_with_openai_per_entity(
         duplicates: List[PerEntityDuplicateResult]
 
     try:
-        completion = client.beta.chat.completions.parse(
-            model=openai_model,
+        completion = client.generate_structured_output(
+            model_name=openai_model,
             messages=[
                 {"role": "system", "content": "You are an expert at entity deduplication. Return a valid JSON object with a 'duplicates' field, which is a list of objects with 'candidate_id' and 'justification'."},
                 {"role": "user", "content": prompt}
             ],
-            response_format=PerEntityDuplicateResultList,
+            pydantic_model=PerEntityDuplicateResultList,
             temperature=0.1
         )
-        parsed = completion.choices[0].message.parsed
+        parsed = completion
         for dup in parsed.duplicates:
             cand = next((c for c in candidates if c.id == dup.candidate_id), None)
             if cand:

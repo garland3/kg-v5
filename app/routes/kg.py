@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from typing import Dict, Any
 import logging
 from datetime import datetime
@@ -100,6 +100,87 @@ async def upload_file_extract_kg(
     except Exception as e:
         logging.error(f"Error processing uploaded file: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to process uploaded file: {str(e)}")
+
+# Export the current knowledge graph as a downloadable JSON file
+@router.get("/export")
+async def export_kg(
+    db: Neo4jDriver = Depends(get_db),
+    project_details: dict = Depends(verify_project_access)
+):
+    """
+    Export the current knowledge graph (nodes and edges) for the selected project as a downloadable JSON file.
+    """
+    import io
+    import json
+
+    project_id = project_details["project_id"]
+
+    # Query all people (nodes)
+    with db.get_session() as session:
+        people_result = session.run(
+            "MATCH (p:Person {project_id: $project_id}) RETURN p, ID(p) as id ORDER BY p.name",
+            project_id=project_id
+        )
+        nodes = []
+        node_ids = set()
+        for record in people_result:
+            node = record["p"]
+            node_id = str(record["id"])
+            node_ids.add(node_id)
+            nodes.append({
+                "id": node_id,
+                "name": node.get("name", "Unknown"),
+                "description": node.get("description", ""),
+                "age": node.get("age", None),
+                "email": node.get("email", None),
+                "created_by": node.get("created_by", None),
+                "created_at": node.get("created_at", None),
+                "updated_by": node.get("updated_by", None),
+                "updated_at": node.get("updated_at", None)
+            })
+
+        # Query all relationships (edges) between people in this project
+        rel_result = session.run(
+            """
+            MATCH (p1:Person {project_id: $project_id})-[r {project_id: $project_id}]->(p2:Person {project_id: $project_id})
+            RETURN ID(p1) as source_id, ID(p2) as target_id, type(r) as relationship_type, r
+            """,
+            project_id=project_id
+        )
+        edges = []
+        for record in rel_result:
+            # Only include edges where both source and target are in the current node set
+            source_id = str(record["source_id"])
+            target_id = str(record["target_id"])
+            if source_id in node_ids and target_id in node_ids:
+                rel_type = record["relationship_type"].replace('_', ' ')
+                rel = record["r"]
+                edges.append({
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "relationship_type": rel_type,
+                    "created_by": rel.get("created_by", None),
+                    "created_at": rel.get("created_at", None),
+                    "updated_by": rel.get("updated_by", None),
+                    "updated_at": rel.get("updated_at", None)
+                })
+
+    # Prepare JSON data
+    export_data = {
+        "nodes": nodes,
+        "edges": edges
+    }
+    json_bytes = json.dumps(export_data, indent=2).encode("utf-8")
+    file_like = io.BytesIO(json_bytes)
+
+    # Return as downloadable file
+    return StreamingResponse(
+        file_like,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": "attachment; filename=knowledge_graph_export.json"
+        }
+    )
 
 # Store knowledge graph after approval
 @router.post("/store", response_model=Dict[str, Any])

@@ -140,6 +140,21 @@ async def deduplicate_page(
     
     return templates.TemplateResponse("deduplicate.html", context)
 
+@router.get("/viz2", response_class=HTMLResponse)
+async def viz2_page(
+    request: Request,
+    project: dict = Depends(require_selected_project)
+):
+    """
+    Render the new 2D knowledge graph visualization page (viz2).
+    """
+    return templates.TemplateResponse("viz2.html", {
+        "request": request,
+        "user_email": request.state.user_email,
+        "selected_project_id": project["project_id"],
+        "selected_project_name": project["project_name"]
+    })
+
 # Note: The /deduplicate/merge endpoint is no longer used
 # Merges are now handled directly through the API endpoint /api/kg/merge
 # and processed via JavaScript in the client

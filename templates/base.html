@@ -23,6 +23,13 @@
             <a href="/visualize">Graph Visualization</a>
             <a href="/extract-kg">Extract Knowledge Graph</a>
             <a href="/deduplicate">Deduplicate Entities</a>
+            {% if selected_project_id %}
+                <a href="/viz2">Viz2</a>
+                <a href="/api/kg/export?project_id={{ selected_project_id }}" download>Export</a>
+            {% else %}
+                <a href="#" style="pointer-events: none; opacity: 0.5; cursor: not-allowed;" title="Select a project to enable Viz2">Viz2</a>
+                <a href="#" style="pointer-events: none; opacity: 0.5; cursor: not-allowed;" title="Select a project to enable export">Export</a>
+            {% endif %}
         </nav>
     </header>
 

@@ -3,7 +3,7 @@ import logging
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from fastapi import HTTPException, UploadFile
-from openai import OpenAI
+from app.utils.llm import get_llm_client
 from dotenv import load_dotenv
 
 # --- Configuration ---
@@ -14,12 +14,6 @@ load_dotenv()
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-if not os.getenv("OPENAI_API_KEY"):
-    logger.warning("OPENAI_API_KEY environment variable not set. OpenAI calls will fail.")
-    raise ValueError("OPENAI_API_KEY is required.")
 
 # Get model from environment
 model = os.getenv("OPENAI_MODEL", "gpt-4")
@@ -112,19 +106,19 @@ async def extract_knowledge_graph_from_text(text: str, project_id: Optional[int]
         5. ONLY include entities of type 'Person' - do not include organizations, locations, or other entity types
         """
 
-        # Make the API call with structured output using Pydantic model
-        completion = client.beta.chat.completions.parse(
-            model=model,
+        client = get_llm_client()
+        completion = client.generate_structured_output(
+            model_name=model,
             messages=[
                 {"role": "system", "content": "You are an expert at extracting structured knowledge graphs from unstructured text. Return a valid JSON object with 'entities' and 'relationships' fields."},
                 {"role": "user", "content": prompt}
             ],
-            response_format=KnowledgeGraph,
+            pydantic_model=KnowledgeGraph,
             temperature=0.1
         )
 
         # Filter entities to include only those of type 'Person'
-        parsed_response = completion.choices[0].message.parsed
+        parsed_response = completion
         parsed_response.entities = [entity for entity in parsed_response.entities if entity.type == "Person"]
 
         return parsed_response

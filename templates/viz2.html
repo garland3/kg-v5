@@ -1,0 +1,464 @@
+{% extends "base.html" %}
+
+{% block title %}2D Knowledge Graph Viewer (Force-Directed){% endblock %}
+
+{% block head_scripts %}
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/DragControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/renderers/CSS2DRenderer.js"></script>
+{% endblock %}
+
+{% block head_styles %}
+<style>
+    body { margin: 0; overflow: hidden; font-family: 'Inter', sans-serif; background-color: #f0f4f8; }
+    #container { width: 100vw; height: 100vh; position: relative; }
+    #controls {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        z-index: 10;
+        background-color: rgba(255, 255, 255, 0.9);
+        padding: 10px 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    button {
+        padding: 8px 16px;
+        background-color: #4a90e2;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+        transition: background-color 0.3s ease;
+    }
+    button:hover {
+        background-color: #357abd;
+    }
+    .node-label {
+        color: #333;
+        background-color: rgba(255, 255, 255, 0.7);
+        padding: 2px 5px;
+        border-radius: 4px;
+        font-size: 12px;
+        pointer-events: none;
+        white-space: nowrap;
+        transition: font-weight 0.2s ease;
+    }
+    .edge-label {
+        color: #555;
+        background-color: rgba(220, 220, 220, 0.6);
+        padding: 1px 4px;
+        border-radius: 3px;
+        font-size: 10px;
+        pointer-events: none;
+        white-space: nowrap;
+    }
+    .label-bold {
+        font-weight: bold;
+    }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div id="container"></div>
+<div id="controls">
+    <button id="spreadMoreBtn" title="Spread More (Increase Repulsion)">▲</button>
+    <button id="spreadLessBtn" title="Spread Less (Decrease Repulsion)">▼</button>
+    <span id="repulsionValue" style="margin: 0 8px; font-size: 13px; color: #333;"></span>
+    <button id="autoArrangeBtn">Auto Arrange</button>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const SELECTED_PROJECT_ID = "{{ selected_project_id }}";
+let graphData = { nodes: [], edges: [] };
+
+async function fetchGraphData() {
+    if (!SELECTED_PROJECT_ID) {
+        alert("No project selected. Please select a project to view the graph.");
+        return;
+    }
+    try {
+        const response = await fetch(`/api/kg/export?project_id=${SELECTED_PROJECT_ID}`);
+        if (!response.ok) throw new Error("Failed to fetch knowledge graph data.");
+        graphData = await response.json();
+        initializeGraph();
+    } catch (err) {
+        alert("Error loading knowledge graph: " + err.message);
+    }
+}
+
+function initializeGraph() {
+    // Filter edges to only include those connecting nodes in our subset
+    const nodeIds = new Set(graphData.nodes.map(n => n.id));
+    const filteredEdges = graphData.edges.filter(edge =>
+        nodeIds.has(edge.source_id) && nodeIds.has(edge.target_id)
+    );
+
+    // --- Three.js Setup ---
+    let scene, camera, renderer, labelRenderer;
+    let controls, dragControls;
+    let nodes = {};
+    let edges = [];
+    let draggableObjects = [];
+    let INTERSECTED;
+    let isDragging = false;
+    let draggedNodeId = null;
+
+    const container = document.getElementById('container');
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    let simulationSteps = 0;
+    const MAX_SIMULATION_STEPS = 150;
+    const timeStep = 0.05;
+    const damping = 0.95;
+    let repulsionStrength = 1000;
+    const springStiffness = 0.05;
+    const idealSpringLength = 100;
+    const excitationMagnitude = 10;
+
+    function init() {
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xf0f4f8);
+
+        const aspect = window.innerWidth / window.innerHeight;
+        const frustumSize = 600;
+        camera = new THREE.OrthographicCamera(
+            frustumSize * aspect / -2, frustumSize * aspect / 2,
+            frustumSize / 2, frustumSize / -2,
+            1, 1000
+        );
+        camera.position.z = 100;
+
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        container.appendChild(renderer.domElement);
+
+        labelRenderer = new THREE.CSS2DRenderer();
+        labelRenderer.setSize(window.innerWidth, window.innerHeight);
+        labelRenderer.domElement.style.position = 'absolute';
+        labelRenderer.domElement.style.top = '0px';
+        labelRenderer.domElement.style.pointerEvents = 'none';
+        container.appendChild(labelRenderer.domElement);
+
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableRotate = false;
+        controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.1;
+        controls.screenSpacePanning = true;
+
+        createNodes();
+        createEdges();
+        randomLayout();
+
+        dragControls = new THREE.DragControls(draggableObjects, camera, renderer.domElement);
+        dragControls.addEventListener('dragstart', function (event) {
+            controls.enabled = false;
+            isDragging = true;
+            draggedNodeId = event.object.userData.id;
+            if (nodes[draggedNodeId]) {
+                nodes[draggedNodeId].velocity.set(0, 0);
+            }
+            simulationSteps = 0;
+        });
+        dragControls.addEventListener('drag', function (event) {
+            const nodeData = nodes[event.object.userData.id];
+            if (nodeData) {
+                nodeData.velocity.set(0, 0);
+                event.object.position.z = 0;
+                if (nodeData.label) {
+                    nodeData.label.position.copy(event.object.position);
+                }
+                updateConnectedEdges(event.object.userData.id);
+            }
+        });
+        dragControls.addEventListener('dragend', function (event) {
+            controls.enabled = true;
+            isDragging = false;
+            if (nodes[draggedNodeId]) {
+                nodes[draggedNodeId].velocity.set(0, 0);
+            }
+            draggedNodeId = null;
+        });
+
+        window.addEventListener('resize', onWindowResize, false);
+        document.addEventListener('mousemove', onMouseMove, false);
+        document.getElementById('autoArrangeBtn').addEventListener('click', startAutoArrange);
+
+        // Repulsion controls
+        document.getElementById('spreadMoreBtn').addEventListener('click', function() {
+            repulsionStrength *= 1.25;
+            updateRepulsionDisplay();
+            startAutoArrange();
+        });
+        document.getElementById('spreadLessBtn').addEventListener('click', function() {
+            repulsionStrength /= 1.25;
+            updateRepulsionDisplay();
+            startAutoArrange();
+        });
+        updateRepulsionDisplay();
+
+        animate();
+    }
+
+    function createNodes() {
+        const geometry = new THREE.SphereGeometry(6, 16, 16);
+        graphData.nodes.forEach(nodeData => {
+            const material = new THREE.MeshBasicMaterial({ color: Math.random() * 0xffffff });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.userData = { id: nodeData.id, type: 'node' };
+            mesh.position.z = 0;
+
+            const labelDiv = document.createElement('div');
+            labelDiv.className = 'node-label';
+            labelDiv.textContent = nodeData.name;
+            const label = new THREE.CSS2DObject(labelDiv);
+            label.position.copy(mesh.position);
+            scene.add(label);
+
+            nodes[nodeData.id] = {
+                mesh,
+                label,
+                lineConnections: [],
+                velocity: new THREE.Vector2(0, 0),
+                force: new THREE.Vector2(0, 0)
+            };
+            scene.add(mesh);
+            draggableObjects.push(mesh);
+        });
+    }
+
+    function createEdges() {
+        edges = [];
+        Object.values(nodes).forEach(n => n.lineConnections = []);
+        filteredEdges.forEach(edgeData => {
+            const sourceNode = nodes[edgeData.source_id];
+            const targetNode = nodes[edgeData.target_id];
+            if (!sourceNode || !targetNode) return;
+            const points = [sourceNode.mesh.position, targetNode.mesh.position];
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            const material = new THREE.LineBasicMaterial({ color: 0x888888, linewidth: 1.5 });
+            const line = new THREE.Line(geometry, material);
+            line.userData = { type: 'edge', sourceId: edgeData.source_id, targetId: edgeData.target_id };
+            scene.add(line);
+
+            const edgeLabelDiv = document.createElement('div');
+            edgeLabelDiv.className = 'edge-label';
+            edgeLabelDiv.textContent = edgeData.relationship_type;
+            const edgeLabel = new THREE.CSS2DObject(edgeLabelDiv);
+            edgeLabel.position.copy(sourceNode.mesh.position).add(targetNode.mesh.position).multiplyScalar(0.5);
+            scene.add(edgeLabel);
+
+            const edge = { line, label: edgeLabel };
+            edges.push(edge);
+
+            sourceNode.lineConnections.push(edge);
+            targetNode.lineConnections.push(edge);
+        });
+    }
+
+    function updateConnectedEdges(nodeId) {
+        const nodeData = nodes[nodeId];
+        if (!nodeData || !nodeData.lineConnections) return;
+        nodeData.lineConnections.forEach(edge => {
+            const sourceNode = nodes[edge.line.userData.sourceId];
+            const targetNode = nodes[edge.line.userData.targetId];
+            if (sourceNode && targetNode) {
+                const positions = edge.line.geometry.attributes.position;
+                positions.setXYZ(0, sourceNode.mesh.position.x, sourceNode.mesh.position.y, 0);
+                positions.setXYZ(1, targetNode.mesh.position.x, targetNode.mesh.position.y, 0);
+                positions.needsUpdate = true;
+                edge.label.position.copy(sourceNode.mesh.position).add(targetNode.mesh.position).multiplyScalar(0.5);
+                edge.label.position.z = 0;
+            }
+        });
+    }
+
+    function randomLayout() {
+        const spread = 200;
+        Object.values(nodes).forEach(node => {
+            const x = (Math.random() - 0.5) * spread;
+            const y = (Math.random() - 0.5) * spread;
+            node.mesh.position.set(x, y, 0);
+            node.label.position.set(x, y, 0);
+            updateConnectedEdges(node.mesh.userData.id);
+        });
+        edges.forEach(edge => {
+            const sourceNode = nodes[edge.line.userData.sourceId];
+            const targetNode = nodes[edge.line.userData.targetId];
+            if(sourceNode && targetNode) {
+                const positions = edge.line.geometry.attributes.position;
+                positions.setXYZ(0, sourceNode.mesh.position.x, sourceNode.mesh.position.y, 0);
+                positions.setXYZ(1, targetNode.mesh.position.x, targetNode.mesh.position.y, 0);
+                positions.needsUpdate = true;
+                edge.label.position.copy(sourceNode.mesh.position).add(targetNode.mesh.position).multiplyScalar(0.5);
+                edge.label.position.z = 0;
+            }
+        });
+    }
+
+    function startAutoArrange() {
+        if (isDragging) return;
+        Object.values(nodes).forEach(node => {
+            node.velocity.set(
+                (Math.random() - 0.5) * excitationMagnitude,
+                (Math.random() - 0.5) * excitationMagnitude
+            );
+        });
+        simulationSteps = MAX_SIMULATION_STEPS;
+    }
+
+    function runPhysicsStep() {
+        if (isDragging) {
+            simulationSteps = 0;
+            return;
+        }
+        const nodeIdsList = Object.keys(nodes);
+        nodeIdsList.forEach(id => nodes[id].force.set(0, 0));
+        for (let i = 0; i < nodeIdsList.length; i++) {
+            for (let j = i + 1; j < nodeIdsList.length; j++) {
+                const nodeA = nodes[nodeIdsList[i]];
+                const nodeB = nodes[nodeIdsList[j]];
+                const dx = nodeB.mesh.position.x - nodeA.mesh.position.x;
+                const dy = nodeB.mesh.position.y - nodeA.mesh.position.y;
+                const distanceSq = dx * dx + dy * dy;
+                const distance = Math.sqrt(distanceSq);
+                if (distance > 0.1) {
+                    const forceMagnitude = repulsionStrength / distanceSq;
+                    const forceX = (dx / distance) * forceMagnitude;
+                    const forceY = (dy / distance) * forceMagnitude;
+                    nodeA.force.x -= forceX;
+                    nodeA.force.y -= forceY;
+                    nodeB.force.x += forceX;
+                    nodeB.force.y += forceY;
+                } else {
+                    nodeA.force.x += (Math.random() - 0.5) * 0.1;
+                    nodeA.force.y += (Math.random() - 0.5) * 0.1;
+                    nodeB.force.x -= (Math.random() - 0.5) * 0.1;
+                    nodeB.force.y -= (Math.random() - 0.5) * 0.1;
+                }
+            }
+        }
+        edges.forEach(edge => {
+            const sourceNode = nodes[edge.line.userData.sourceId];
+            const targetNode = nodes[edge.line.userData.targetId];
+            if (sourceNode && targetNode) {
+                const dx = targetNode.mesh.position.x - sourceNode.mesh.position.x;
+                const dy = targetNode.mesh.position.y - sourceNode.mesh.position.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                if (distance > 0.1) {
+                    const displacement = distance - idealSpringLength;
+                    const forceMagnitude = springStiffness * displacement;
+                    const forceX = (dx / distance) * forceMagnitude;
+                    const forceY = (dy / distance) * forceMagnitude;
+                    sourceNode.force.x += forceX;
+                    sourceNode.force.y += forceY;
+                    targetNode.force.x -= forceX;
+                    targetNode.force.y -= forceY;
+                }
+            }
+        });
+        const centerStrength = 0.005;
+        nodeIdsList.forEach(id => {
+            const node = nodes[id];
+            node.force.x -= centerStrength * node.mesh.position.x;
+            node.force.y -= centerStrength * node.mesh.position.y;
+        });
+        nodeIdsList.forEach(id => {
+            const node = nodes[id];
+            if (isDragging && id === draggedNodeId) {
+                node.velocity.set(0,0);
+                return;
+            }
+            const accX = node.force.x;
+            const accY = node.force.y;
+            node.velocity.x = (node.velocity.x + accX * timeStep) * damping;
+            node.velocity.y = (node.velocity.y + accY * timeStep) * damping;
+            node.mesh.position.x += node.velocity.x * timeStep;
+            node.mesh.position.y += node.velocity.y * timeStep;
+            node.mesh.position.z = 0;
+            node.label.position.copy(node.mesh.position);
+            updateConnectedEdges(id);
+        });
+        simulationSteps--;
+    }
+
+    function onWindowResize() {
+        const aspect = window.innerWidth / window.innerHeight;
+        const frustumSize = 600;
+        camera.left = frustumSize * aspect / -2;
+        camera.right = frustumSize * aspect / 2;
+        camera.top = frustumSize / 2;
+        camera.bottom = frustumSize / -2;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        labelRenderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function onMouseMove(event) {
+        if (isDragging) return;
+        mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        raycaster.setFromCamera(mouse, camera);
+        const intersects = raycaster.intersectObjects(draggableObjects);
+        if (intersects.length > 0) {
+            if (INTERSECTED != intersects[0].object) {
+                if (INTERSECTED) {
+                    const oldNodeData = nodes[INTERSECTED.userData.id];
+                    if (oldNodeData && oldNodeData.label) {
+                        oldNodeData.label.element.classList.remove('label-bold');
+                    }
+                }
+                INTERSECTED = intersects[0].object;
+                const newNodeData = nodes[INTERSECTED.userData.id];
+                if (newNodeData && newNodeData.label) {
+                    newNodeData.label.element.classList.add('label-bold');
+                }
+            }
+        } else {
+            if (INTERSECTED) {
+                const oldNodeData = nodes[INTERSECTED.userData.id];
+                if (oldNodeData && oldNodeData.label) {
+                    oldNodeData.label.element.classList.remove('label-bold');
+                }
+            }
+            INTERSECTED = null;
+        }
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        if (simulationSteps > 0 && !isDragging) {
+            runPhysicsStep();
+        }
+        controls.update();
+        render();
+    }
+
+    function render() {
+        renderer.render(scene, camera);
+        labelRenderer.render(scene, camera);
+    }
+
+    function updateRepulsionDisplay() {
+        const el = document.getElementById('repulsionValue');
+        if (el) {
+            el.textContent = `Spread: ${Math.round(repulsionStrength)}`;
+        }
+    }
+
+    init();
+}
+
+fetchGraphData();
+</script>
+{% endblock %}
