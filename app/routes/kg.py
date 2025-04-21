@@ -8,6 +8,9 @@ from app.models.models import TextInput
 from src.kg.kg import extract_knowledge_graph_from_text, read_file_content
 from app.utils.project_auth import verify_project_access # Added import
 
+import os
+from openai import OpenAI
+
 router = APIRouter(prefix="/api/kg")
 
 # Extract knowledge graph from text
@@ -134,15 +137,32 @@ async def store_kg(
             id_mapping = {}
             
             # Store entities with new unique entity IDs
+            openai_api_key = os.getenv("OPENAI_API_KEY")
+            embedding_model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-large")
+            client = OpenAI(api_key=openai_api_key)
             for i, entity in enumerate(entities):
                 # Create a new unique entity ID by adding the offset
                 original_entity_id = entity["entity_id"]
                 new_entity_id = str(int(offset) + i + 1)  # +1 to avoid starting at 0
-                
+
                 # Store the mapping
                 id_mapping[original_entity_id] = new_entity_id
-                
-                # Create entity in Neo4j with the new entity ID, project_id, and user tracking
+
+                # Generate embedding for the entity (name + description)
+                name = entity["label"]
+                description = entity["description"]
+                text = f"{name or ''} - {description or ''}"
+                embedding = None
+                try:
+                    response = client.embeddings.create(
+                        input=text,
+                        model=embedding_model
+                    )
+                    embedding = response.data[0].embedding
+                except Exception as e:
+                    logging.error(f"Error generating embedding for entity '{name}': {e}")
+
+                # Create entity in Neo4j with the new entity ID, project_id, user tracking, and embedding
                 result = session.run(
                     """
                     CREATE (p:Person {
@@ -150,25 +170,27 @@ async def store_kg(
                         original_entity_id: $original_entity_id,
                         name: $name,
                         description: $description,
-                        project_id: $project_id, // Added project_id
+                        project_id: $project_id,
                         created_by: $created_by,
                         created_at: $created_at,
                         updated_by: $updated_by,
-                        updated_at: $updated_at
+                        updated_at: $updated_at,
+                        embedding: $embedding
                     })
                     RETURN p, ID(p) as id
                     """,
                     entity_id=new_entity_id,
                     original_entity_id=original_entity_id,
-                    name=entity["label"],  # Use label as name
-                    description=entity["description"],
-                    project_id=project_id, # Pass project_id
+                    name=name,
+                    description=description,
+                    project_id=project_id,
                     created_by=user_email,
                     created_at=current_time,
                     updated_by=user_email,
-                    updated_at=current_time
+                    updated_at=current_time,
+                    embedding=embedding
                 )
-                
+
                 data = result.single()
                 if data:
                     node = data["p"]
@@ -177,7 +199,7 @@ async def store_kg(
                         "id": node_id,
                         "entity_id": node.get("entity_id", ""),
                         "original_entity_id": node.get("original_entity_id", ""),
-                        "name": node.get("name", ""),  # Return name instead of label
+                        "name": node.get("name", ""),
                         "description": node.get("description", "")
                     })
             

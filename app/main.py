@@ -8,6 +8,48 @@ from app.postgres_db import init_postgres_db
 from app.routes import web, api, kg, deduplicate, postgres, projects, session
 from app.config import USE_HEADER_AUTH, TEST_USER_EMAIL, TEST_USER_BELONGS_TO_AUTHORIZATION_GROUP
 
+import os
+from neo4j import GraphDatabase
+
+from src.kg.deduplicate import batch_generate_embeddings
+
+# Vector index creation for Neo4j
+def get_embedding_dimensions(model_name):
+    # Known OpenAI embedding model dimensions
+    model_dims = {
+        "text-embedding-3-small": 1536,
+        "text-embedding-3-large": 3072,
+        "text-embedding-ada-002": 1536
+    }
+    # Try to match by substring for flexibility
+    for key, val in model_dims.items():
+        if key in model_name:
+            return val
+    return 1536  # Default
+
+async def create_vector_index():
+    NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+    NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+    NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password123")
+    embedding_model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-large")
+    dimensions = get_embedding_dimensions(embedding_model)
+    driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    try:
+        with driver.session() as session:
+            session.run(
+                """
+                CREATE VECTOR INDEX person_embeddings IF NOT EXISTS
+                FOR (p:Person) ON (p.embedding)
+                OPTIONS {indexConfig: {
+                  `vector.dimensions`: $dimensions,
+                  `vector.similarity_function`: 'cosine'
+                }}
+                """,
+                dimensions=dimensions
+            )
+    finally:
+        driver.close()
+
 # Create FastAPI app
 app = FastAPI(title="Neo4j FastAPI Demo")
 
@@ -59,6 +101,8 @@ app.include_router(session.router)
 async def startup_db_client():
     await init_db()
     await init_postgres_db()
+    await create_vector_index()
+    await batch_generate_embeddings()
     logging.info("Application startup complete")
 
 if __name__ == "__main__":

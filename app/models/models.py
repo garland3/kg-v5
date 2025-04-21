@@ -12,6 +12,7 @@ class PersonBase(BaseModel):
     created_at: Optional[str] = None
     updated_by: Optional[str] = None
     updated_at: Optional[str] = None
+    embedding: Optional[list[float]] = None  # Vector embedding for deduplication
 
 class PersonCreate(PersonBase):
     pass
@@ -24,6 +25,7 @@ class PersonUpdate(BaseModel):
 
 class Person(PersonBase):
     id: str
+    embedding: Optional[list[float]] = None
 
     class Config:
         orm_mode = True
