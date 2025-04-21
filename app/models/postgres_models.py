@@ -3,15 +3,52 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.postgres_db import Base
 
-# Example of a many-to-many association table
-# tag_association = Table(
-#     'tag_association',
-#     Base.metadata,
-#     Column('item_id', Integer, ForeignKey('items.id'), primary_key=True),
-#     Column('tag_id', Integer, ForeignKey('tags.id'), primary_key=True)
-# )
+# Project-KnowledgeGraph association table (for future use)
+project_kg_association = Table(
+    'project_kg_association',
+    Base.metadata,
+    Column('project_id', Integer, ForeignKey('projects.id'), primary_key=True),
+    Column('kg_id', Integer, ForeignKey('knowledge_graphs.id'), primary_key=True)
+)
 
-# Example model for a User
+# Project model
+class Project(Base):
+    __tablename__ = "projects"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), index=True)
+    description = Column(Text, nullable=True)
+    creator_email = Column(String(255), index=True)
+    authorization_group = Column(String(255), index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationship for future integration with knowledge graphs
+    # knowledge_graphs = relationship("KnowledgeGraph", secondary=project_kg_association, back_populates="projects")
+    
+    def __repr__(self):
+        return f"<Project(id={self.id}, name='{self.name}', creator='{self.creator_email}')>"
+
+# Knowledge Graph model placeholder for future integration
+class KnowledgeGraph(Base):
+    __tablename__ = "knowledge_graphs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), index=True)
+    description = Column(Text, nullable=True)
+    creator_email = Column(String(255), index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationship with project
+    project = relationship("Project")
+    # projects = relationship("Project", secondary=project_kg_association, back_populates="knowledge_graphs")
+    
+    def __repr__(self):
+        return f"<KnowledgeGraph(id={self.id}, name='{self.name}')>"
+
+# User model
 class User(Base):
     __tablename__ = "users"
 

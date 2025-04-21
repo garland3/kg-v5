@@ -175,6 +175,9 @@
             <button id="rejectButton" class="reject-btn">Reject</button>
         </div>
     </div>
+    
+    <!-- Hidden input to store project ID -->
+    <input type="hidden" id="projectId" value="{{ selected_project_id }}">
 
 {% endblock %}
 
@@ -197,9 +200,23 @@
         
         // API base URL
         const API_BASE_URL = '/api';
+        // Get project ID from hidden input element
+        const projectIdElement = document.getElementById('projectId');
+        const PROJECT_ID = projectIdElement && projectIdElement.value && !isNaN(parseInt(projectIdElement.value)) ? parseInt(projectIdElement.value) : null;
         
         // Current extracted knowledge graph
         let currentKG = null;
+
+        // Helper to construct URL with project ID if available
+        function getApiUrl(endpoint) {
+            let url = `${API_BASE_URL}${endpoint}`;
+            if (PROJECT_ID !== null) {
+                // Check if endpoint already has query params
+                url += url.includes('?') ? '&' : '?';
+                url += `project_id=${PROJECT_ID}`;
+            }
+            return url;
+        }
         
         // Show message
         function showMessage(message, type) {
@@ -212,28 +229,36 @@
         
         // Set loading state
         function setLoading(isLoading) {
-            const container = document.querySelector('.textarea-container');
+            const container = document.querySelector('.textarea-container'); // Target the correct container
+            const fileContainer = document.querySelector('.file-upload'); // Target file upload area too
             if (isLoading) {
                 container.classList.add('processing');
                 extractButton.disabled = true;
                 uploadButton.disabled = true;
                 extractButton.textContent = 'Processing...';
                 uploadButton.textContent = 'Processing...';
+                fileInput.disabled = true; // Disable file input while processing
             } else {
                 container.classList.remove('processing');
                 extractButton.disabled = false;
                 uploadButton.disabled = false;
                 extractButton.textContent = 'Extract Knowledge Graph';
                 uploadButton.textContent = 'Upload and Extract';
+                fileInput.disabled = false; // Re-enable file input
             }
         }
         
         // Extract knowledge graph from text
         async function extractKnowledgeGraph(text) {
+            if (PROJECT_ID === null) {
+                showMessage('Please select a project before extracting.', 'error');
+                return;
+            }
             setLoading(true);
             
             try {
-                const response = await fetch(`${API_BASE_URL}/kg/extract`, {
+                const url = getApiUrl('/kg/extract'); // Use helper
+                const response = await fetch(url, { 
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -242,7 +267,8 @@
                 });
                 
                 if (!response.ok) {
-                    throw new Error('Failed to extract knowledge graph');
+                     const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to extract knowledge graph');
                 }
                 
                 const result = await response.json();
@@ -259,7 +285,7 @@
                 showMessage('Knowledge graph extracted successfully', 'success');
             } catch (error) {
                 console.error('Error extracting knowledge graph:', error);
-                showMessage('Error extracting knowledge graph', 'error');
+                showMessage(`Error extracting knowledge graph: ${error.message}`, 'error');
             } finally {
                 setLoading(false);
             }
@@ -267,19 +293,26 @@
         
         // Upload file and extract knowledge graph
         async function uploadFileAndExtract(file) {
+             if (PROJECT_ID === null) {
+                showMessage('Please select a project before uploading.', 'error');
+                return;
+            }
             setLoading(true);
             
             try {
                 const formData = new FormData();
                 formData.append('file', file);
                 
-                const response = await fetch(`${API_BASE_URL}/kg/upload`, {
+                const url = getApiUrl('/kg/upload'); // Use helper
+                const response = await fetch(url, { 
                     method: 'POST',
                     body: formData
+                    // No Content-Type header needed for FormData, browser sets it
                 });
                 
                 if (!response.ok) {
-                    throw new Error('Failed to process file');
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to process file');
                 }
                 
                 const result = await response.json();
@@ -296,7 +329,7 @@
                 showMessage('File processed successfully', 'success');
             } catch (error) {
                 console.error('Error processing file:', error);
-                showMessage('Error processing file', 'error');
+                showMessage(`Error processing file: ${error.message}`, 'error');
             } finally {
                 setLoading(false);
             }
@@ -309,7 +342,7 @@
             
             // Display entities
             entityList.innerHTML = '';
-            if (kg.entities.length === 0) {
+            if (!kg || !kg.entities || kg.entities.length === 0) {
                 entityList.innerHTML = '<p>No entities found</p>';
             } else {
                 const entityTable = document.createElement('table');
@@ -340,7 +373,7 @@
             
             // Display relationships
             relationshipList.innerHTML = '';
-            if (kg.relationships.length === 0) {
+             if (!kg || !kg.relationships || kg.relationships.length === 0) {
                 relationshipList.innerHTML = '<p>No relationships found</p>';
             } else {
                 const relationshipTable = document.createElement('table');
@@ -381,6 +414,10 @@
         
         // Visualize the knowledge graph
         function visualizeGraph(kg) {
+             if (!kg || !kg.entities || kg.entities.length === 0) {
+                 previewGraph.innerHTML = '<p style="text-align: center; margin-top: 20px;">No graph to display.</p>';
+                 return;
+             }
             // Create nodes array
             const nodes = new vis.DataSet(
                 kg.entities.map(entity => ({
@@ -459,9 +496,14 @@
                 showMessage('No knowledge graph to approve', 'error');
                 return;
             }
+             if (PROJECT_ID === null) { // Should not happen if KG exists, but safety check
+                showMessage('Cannot approve: No project selected.', 'error');
+                return;
+            }
             
             try {
-                const response = await fetch(`${API_BASE_URL}/kg/store`, {
+                const url = getApiUrl('/kg/store'); // Use helper
+                const response = await fetch(url, { 
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -470,7 +512,8 @@
                 });
                 
                 if (!response.ok) {
-                    throw new Error('Failed to store knowledge graph');
+                     const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to store knowledge graph');
                 }
                 
                 const result = await response.json();
@@ -484,7 +527,7 @@
                 currentKG = null;
             } catch (error) {
                 console.error('Error storing knowledge graph:', error);
-                showMessage('Error storing knowledge graph', 'error');
+                showMessage(`Error storing knowledge graph: ${error.message}`, 'error');
             }
         }
         
@@ -518,5 +561,15 @@
         
         approveButton.addEventListener('click', approveAndAddToDatabase);
         rejectButton.addEventListener('click', rejectKnowledgeGraph);
+
+        // Initial check if project is selected
+         document.addEventListener('DOMContentLoaded', () => {
+            if (PROJECT_ID === null) {
+                showMessage('Please select a project from the Project Management page to extract data.', 'info');
+                extractButton.disabled = true;
+                uploadButton.disabled = true;
+                fileInput.disabled = true;
+            }
+        });
 </script>
 {% endblock %}

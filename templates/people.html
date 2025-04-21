@@ -131,6 +131,9 @@
             <tbody></tbody>
         </table>
     </div>
+    
+    <!-- Hidden input to store project ID -->
+    <input type="hidden" id="projectId" value="{{ selected_project_id }}">
 
 <div id="relationshipsContainer" class="card hidden" style="margin-top: 2rem;">
         <h2>Relationships</h2>
@@ -175,6 +178,20 @@
 
         // API base URL
         const API_BASE_URL = '/api';
+        // Get project ID from hidden input element
+        const projectIdElement = document.getElementById('projectId');
+        const PROJECT_ID = projectIdElement && projectIdElement.value && !isNaN(parseInt(projectIdElement.value)) ? parseInt(projectIdElement.value) : null;
+
+        // Helper to construct URL with project ID if available
+        function getApiUrl(endpoint) {
+            let url = `${API_BASE_URL}${endpoint}`;
+            if (PROJECT_ID !== null) {
+                // Check if endpoint already has query params
+                url += url.includes('?') ? '&' : '?';
+                url += `project_id=${PROJECT_ID}`;
+            }
+            return url;
+        }
 
         // Show message
         function showMessage(message, type) {
@@ -195,8 +212,8 @@
                 searching: true,
                 ordering: true,
                 info: true,
-                pageLength: 10,
-                lengthMenu: [5, 10, 25, 50],
+                pageLength: 100,
+                lengthMenu: [ 50, 100, 200, 500],
                 columns: [
                     { data: 'id', width: '5%' },
                     { data: 'name', width: '10%' },
@@ -235,8 +252,8 @@
                 searching: true,
                 ordering: true,
                 info: true,
-                pageLength: 10,
-                lengthMenu: [5, 10, 25, 50],
+                pageLength: 100,
+                lengthMenu: [50, 100, 200, 500],
                 columns: [
                     { data: 'source_name', width: '15%' },
                     { data: 'relationship_type', width: '15%' },
@@ -266,8 +283,16 @@
 
         // Load all people for dropdowns
         async function loadPeopleForDropdowns() {
+            if (PROJECT_ID === null) { // Explicit null check
+                console.warn("No project selected, cannot load people for dropdowns.");
+                person1Select.innerHTML = '<option value="">Select Project First</option>';
+                person2Select.innerHTML = '<option value="">Select Project First</option>';
+                return; 
+            }
             try {
-                const response = await fetch(`${API_BASE_URL}/people/?limit=1000`); // Get all people for dropdowns
+                const url = getApiUrl('/people/?limit=1000'); // Use helper
+                const response = await fetch(url); 
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 const data = await response.json();
                 const people = data.items;
                 
@@ -291,8 +316,15 @@
 
         // Load people with DataTables
         async function loadPeople() {
+             if (PROJECT_ID === null) { // Explicit null check
+                console.warn("No project selected, cannot load people table.");
+                peopleDataTable.clear().draw(); // Clear the table
+                return; 
+            }
             try {
-                const response = await fetch(`${API_BASE_URL}/people/?limit=1000`); // Get all for initial load
+                const url = getApiUrl('/people/?limit=1000'); // Use helper
+                const response = await fetch(url); 
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 const data = await response.json();
                 
                 // Clear existing data and add new data
@@ -316,9 +348,15 @@
                 name: document.getElementById('name').value,
                 description: document.getElementById('description').value
             };
+
+            if (PROJECT_ID === null) {
+                 showMessage('No project selected. Cannot add person.', 'error');
+                 return;
+            }
             
             try {
-                const response = await fetch(`${API_BASE_URL}/people/`, {
+                const url = getApiUrl('/people/'); // Use helper
+                const response = await fetch(url, { 
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -327,16 +365,17 @@
                 });
                 
                 if (!response.ok) {
-                    throw new Error('Failed to create person');
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to create person');
                 }
                 
                 const result = await response.json();
                 showMessage(`Successfully added ${result.name}`, 'success');
                 personForm.reset();
-                loadPeople();
+                loadPeople(); // Reload people list which includes dropdowns
             } catch (error) {
                 console.error('Error creating person:', error);
-                showMessage('Error creating person', 'error');
+                showMessage(`Error creating person: ${error.message}`, 'error');
             }
         });
 
@@ -349,9 +388,15 @@
                 person2_id: document.getElementById('person2').value,
                 relationship_type: document.getElementById('relationshipType').value
             };
+
+            if (PROJECT_ID === null) {
+                 showMessage('No project selected. Cannot add relationship.', 'error');
+                 return;
+            }
             
             try {
-                const response = await fetch(`${API_BASE_URL}/relationships/`, {
+                const url = getApiUrl('/relationships/'); // Use helper
+                const response = await fetch(url, { 
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -360,7 +405,8 @@
                 });
                 
                 if (!response.ok) {
-                    throw new Error('Failed to create relationship');
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to create relationship');
                 }
                 
                 const result = await response.json();
@@ -371,14 +417,20 @@
                 loadAllRelationships();
             } catch (error) {
                 console.error('Error creating relationship:', error);
-                showMessage('Error creating relationship', 'error');
+                showMessage(`Error creating relationship: ${error.message}`, 'error');
             }
         });
 
         // View relationships for a person
         async function viewRelationships(personId, personName) {
+             if (PROJECT_ID === null) {
+                 showMessage('No project selected. Cannot view relationships.', 'error');
+                 return;
+            }
             try {
-                const response = await fetch(`${API_BASE_URL}/people/${personId}/relationships`);
+                const url = getApiUrl(`/people/${personId}/relationships`); // Use helper
+                const response = await fetch(url); 
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 const relationships = await response.json();
                 
                 // Update the table
@@ -408,6 +460,7 @@
                 // Show the relationships view, hide the people table
                 relationshipsContainer.classList.remove('hidden');
                 document.querySelector('.card:has(#peopleTable)').classList.add('hidden');
+                document.querySelector('.card:has(#allRelationshipsTable)').classList.add('hidden'); // Hide all relationships table too
             } catch (error) {
                 console.error('Error loading relationships:', error);
                 showMessage('Error loading relationships', 'error');
@@ -419,25 +472,32 @@
             if (!confirm('Are you sure you want to delete this person?')) {
                 return;
             }
+
+            if (PROJECT_ID === null) {
+                 showMessage('No project selected. Cannot delete person.', 'error');
+                 return;
+            }
             
             try {
-                const response = await fetch(`${API_BASE_URL}/people/${personId}`, {
+                const url = getApiUrl(`/people/${personId}`); // Use helper
+                const response = await fetch(url, { 
                     method: 'DELETE'
                 });
                 
                 if (!response.ok) {
-                    throw new Error('Failed to delete person');
+                     const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to delete person');
                 }
                 
                 const result = await response.json();
                 showMessage(result.message, 'success');
-                loadPeople();
+                loadPeople(); // Reload people list which includes dropdowns
                 
                 // Refresh the all relationships table since deleting a person also deletes their relationships
                 loadAllRelationships();
             } catch (error) {
                 console.error('Error deleting person:', error);
-                showMessage('Error deleting person', 'error');
+                showMessage(`Error deleting person: ${error.message}`, 'error');
             }
         }
 
@@ -445,12 +505,20 @@
         backButton.addEventListener('click', () => {
             relationshipsContainer.classList.add('hidden');
             document.querySelector('.card:has(#peopleTable)').classList.remove('hidden');
+            document.querySelector('.card:has(#allRelationshipsTable)').classList.remove('hidden'); // Show all relationships table again
         });
 
         // Load all relationships with DataTables
         async function loadAllRelationships() {
+             if (PROJECT_ID === null) { // Explicit null check
+                console.warn("No project selected, cannot load relationships table.");
+                relationshipsDataTable.clear().draw(); // Clear the table
+                return; 
+            }
             try {
-                const response = await fetch(`${API_BASE_URL}/relationships/?limit=1000`); // Get all for initial load
+                const url = getApiUrl('/relationships/?limit=1000'); // Use helper
+                const response = await fetch(url); 
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 const data = await response.json();
                 
                 // Clear existing data and add new data
@@ -468,9 +536,16 @@
             // Initialize DataTables
             initDataTables();
             
-            // Load data
-            loadPeople();
-            loadAllRelationships();
+            // Load data only if a project is selected
+            if (PROJECT_ID !== null) {
+                 loadPeople();
+                 loadAllRelationships();
+            } else {
+                showMessage('Please select a project from the Project Management page to view data.', 'info');
+                // Optionally disable forms if no project is selected
+                personForm.querySelector('button').disabled = true;
+                relationshipForm.querySelector('button').disabled = true;
+            }
         });
 </script>
 {% endblock %}

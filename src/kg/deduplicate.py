@@ -4,10 +4,10 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from openai import OpenAI
 from neo4j import GraphDatabase
-from dotenv import load_dotenv
+# from dotenv import load_dotenv
 
 # Load environment variables from .env file
-load_dotenv()
+# load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -57,12 +57,14 @@ class DeduplicationResponse(BaseModel):
     potential_duplicates_found: int = Field(..., description="Number of potential duplicate pairs found")
     duplicates: List[DuplicatePair] = Field([], description="List of potential duplicate pairs")
 
-async def find_potential_duplicates(limit: int) -> DeduplicationResponse:
+async def find_potential_duplicates(limit: int, project_id: int) -> DeduplicationResponse: # Added project_id
     """
-    Find potential duplicates in the Neo4j database by sending a batch of entities to OpenAI.
+    Find potential duplicates in the Neo4j database for a specific project
+    by sending a batch of entities to OpenAI.
     
     Args:
-        limit: Number of most recent entities to check
+        limit: Number of most recent entities to check within the project
+        project_id: The ID of the project to check within
         
     Returns:
         DeduplicationResponse with potential duplicates
@@ -74,14 +76,15 @@ async def find_potential_duplicates(limit: int) -> DeduplicationResponse:
     
     try:
         with driver.session() as session:
-            # Get entities to check
+            # Get entities to check within the specified project
             entities = session.run(
                 """
-                MATCH (p:Person)
+                MATCH (p:Person {project_id: $project_id})
                 RETURN ID(p) as id, p.name as name, p.description as description
                 ORDER BY ID(p) DESC
                 LIMIT $limit
                 """,
+                project_id=project_id, # Pass project_id
                 limit=limit
             ).data()
             
@@ -104,12 +107,18 @@ async def find_potential_duplicates(limit: int) -> DeduplicationResponse:
             
             # Check for duplicates using OpenAI
             result = await batch_check_duplicates(entity_list)
+
+            # Filter out any pairs where entity1_id == entity2_id (no self-pairs)
+            filtered_pairs = [
+                pair for pair in result.duplicate_pairs
+                if str(pair.entity1_id) != str(pair.entity2_id)
+            ]
             
             # Create response
             return DeduplicationResponse(
                 total_entities_checked=len(entities),
-                potential_duplicates_found=len(result.duplicate_pairs),
-                duplicates=result.duplicate_pairs
+                potential_duplicates_found=len(filtered_pairs),
+                duplicates=filtered_pairs
             )
     
     finally:
@@ -175,86 +184,123 @@ Only include pairs with a confidence score of 5 or higher. If no potential dupli
         # Return an empty result in case of error
         return BatchDeduplicationResult(duplicate_pairs=[])
 
-async def merge_duplicate_entities(entity_id: str, duplicate_id: str, user_email: str = None, current_time: str = None) -> Dict[str, Any]:
+async def merge_duplicate_entities(
+    entity_id: str, 
+    duplicate_id: str, 
+    user_email: str = None, 
+    current_time: str = None, 
+    project_id: int = None # Added project_id
+) -> Dict[str, Any]:
     """
-    Merge two duplicate entities in the Neo4j database.
+    Merge two duplicate entities in the Neo4j database within a specific project.
     
     Args:
         entity_id: ID of the entity to keep
         duplicate_id: ID of the duplicate entity to merge
         user_email: Email of the user performing the merge
         current_time: Timestamp of the merge operation
+        project_id: The ID of the project where the merge should occur
         
     Returns:
         Dictionary with the result of the merge operation
     """
     logger.info(f"Merging entity {duplicate_id} into {entity_id}...")
-    
+
+    # Prevent merging an entity with itself
+    if str(entity_id) == str(duplicate_id):
+        raise ValueError("Cannot merge an entity with itself.")
+
     # If current_time is not provided, generate it
     if current_time is None:
         from datetime import datetime
         current_time = datetime.utcnow().isoformat()
     
+    if project_id is None:
+        raise ValueError("project_id is required for merging entities")
+        
     # Connect to Neo4j
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
     
     try:
         with driver.session() as session:
-            # 1. Get all relationships of the duplicate entity
+            # Verify both entities exist in the project before proceeding
+            check = session.run(
+                """
+                MATCH (keep:Person {project_id: $project_id}) WHERE ID(keep) = $entity_id
+                MATCH (dup:Person {project_id: $project_id}) WHERE ID(dup) = $duplicate_id
+                RETURN keep, dup
+                """,
+                project_id=project_id,
+                entity_id=int(entity_id),
+                duplicate_id=int(duplicate_id)
+            ).single()
+            
+            if not check or not check["keep"] or not check["dup"]:
+                 raise ValueError(f"One or both entities ({entity_id}, {duplicate_id}) not found in project {project_id}")
+
+            # 1. Get all relationships of the duplicate entity within the project
             relationships = session.run(
                 """
-                MATCH (dup)-[r]->(other) WHERE ID(dup) = $duplicate_id
+                MATCH (dup:Person {project_id: $project_id})-[r {project_id: $project_id}]->(other:Person {project_id: $project_id}) 
+                WHERE ID(dup) = $duplicate_id
                 RETURN ID(other) as target_id, type(r) as rel_type, 'outgoing' as direction
                 UNION
-                MATCH (other)-[r]->(dup) WHERE ID(dup) = $duplicate_id
+                MATCH (other:Person {project_id: $project_id})-[r {project_id: $project_id}]->(dup:Person {project_id: $project_id}) 
+                WHERE ID(dup) = $duplicate_id
                 RETURN ID(other) as target_id, type(r) as rel_type, 'incoming' as direction
                 """,
+                project_id=project_id,
                 duplicate_id=int(duplicate_id)
             ).data()
             
-            # 2. Create equivalent relationships for the entity to keep
+            # 2. Create equivalent relationships for the entity to keep within the project
             for rel in relationships:
                 if rel['direction'] == 'outgoing':
-                    # Create outgoing relationship with user tracking
+                    # Create outgoing relationship with project_id and user tracking
                     session.run(
                         f"""
-                        MATCH (keep) WHERE ID(keep) = $entity_id
-                        MATCH (other) WHERE ID(other) = $target_id
+                        MATCH (keep:Person {{project_id: $project_id}}) WHERE ID(keep) = $entity_id
+                        MATCH (other:Person {{project_id: $project_id}}) WHERE ID(other) = $target_id
                         MERGE (keep)-[r:{rel['rel_type']}]->(other)
-                        ON CREATE SET r.created_by = $user_email,
+                        ON CREATE SET r.project_id = $project_id, 
+                                      r.created_by = $user_email,
                                       r.created_at = $current_time,
                                       r.updated_by = $user_email,
                                       r.updated_at = $current_time
                         """,
+                        project_id=project_id,
                         entity_id=int(entity_id),
                         target_id=rel['target_id'],
                         user_email=user_email,
                         current_time=current_time
                     )
                 else:
-                    # Create incoming relationship with user tracking
+                    # Create incoming relationship with project_id and user tracking
                     session.run(
                         f"""
-                        MATCH (keep) WHERE ID(keep) = $entity_id
-                        MATCH (other) WHERE ID(other) = $target_id
+                        MATCH (keep:Person {{project_id: $project_id}}) WHERE ID(keep) = $entity_id
+                        MATCH (other:Person {{project_id: $project_id}}) WHERE ID(other) = $target_id
                         MERGE (other)-[r:{rel['rel_type']}]->(keep)
-                        ON CREATE SET r.created_by = $user_email,
+                        ON CREATE SET r.project_id = $project_id,
+                                      r.created_by = $user_email,
                                       r.created_at = $current_time,
                                       r.updated_by = $user_email,
                                       r.updated_at = $current_time
                         """,
+                        project_id=project_id,
                         entity_id=int(entity_id),
                         target_id=rel['target_id'],
                         user_email=user_email,
                         current_time=current_time
                     )
             
-            # 3. Delete the duplicate entity
+            # 3. Delete the duplicate entity (which must be in the project)
             session.run(
                 """
-                MATCH (dup) WHERE ID(dup) = $duplicate_id
+                MATCH (dup:Person {project_id: $project_id}) WHERE ID(dup) = $duplicate_id
                 DETACH DELETE dup
                 """,
+                project_id=project_id,
                 duplicate_id=int(duplicate_id)
             )
             

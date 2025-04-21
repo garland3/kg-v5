@@ -1,10 +1,11 @@
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, Depends
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 import logging
 from app.database import init_db
 from app.postgres_db import init_postgres_db
-from app.routes import web, api, kg, deduplicate, postgres
+from app.routes import web, api, kg, deduplicate, postgres, projects, session
 from app.config import USE_HEADER_AUTH, TEST_USER_EMAIL, TEST_USER_BELONGS_TO_AUTHORIZATION_GROUP
 
 # Create FastAPI app
@@ -38,6 +39,7 @@ class UserAuthMiddleware(BaseHTTPMiddleware):
 
 
 # Add middleware
+app.add_middleware(SessionMiddleware, secret_key="your-secret-key")  # Replace with a secure secret key
 app.add_middleware(UserAuthMiddleware)
 
 # Mount static files
@@ -49,6 +51,8 @@ app.include_router(api.router)
 app.include_router(kg.router)
 app.include_router(deduplicate.router)
 app.include_router(postgres.router)
+app.include_router(projects.router)
+app.include_router(session.router)
 
 # Startup event
 @app.on_event("startup")

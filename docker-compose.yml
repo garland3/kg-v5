@@ -3,7 +3,6 @@ version: '3'
 services:
   neo4j:
     image: neo4j:latest
-    # container_name: neo4j
     ports:
       - "7474:7474"  # HTTP
       - "7687:7687"  # Bolt
@@ -24,7 +23,6 @@ services:
       
   postgres:
     image: postgres:latest
-    # container_name: postgres
     ports:
       - "5432:5432"
     volumes:
@@ -41,10 +39,33 @@ services:
       timeout: 3s
       retries: 5
       start_period: 10s
+      
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    ports:
+      - "5050:80"
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@example.com
+      - PGADMIN_DEFAULT_PASSWORD=admin123
+      - PGADMIN_SERVER_JSON_FILE=/pgadmin4/servers.json
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+      - ./pgadmin/servers/servers.json:/pgadmin4/servers.json
+      - ./pgadmin/pgpass:/pgpass
+    command: >
+      /bin/bash -c "
+      chmod 600 /pgpass &&
+      /entrypoint.sh
+      "
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
 
   fastapi:
     build: .
-    # container_name: fastapi-app
     ports:
       - "8000:8000"
     depends_on:
@@ -62,58 +83,44 @@ services:
       - POSTGRES_DB=app_db
     networks:
       - app-network
-    # Hot reload for development (you can remove this for production)
     volumes:
       - .:/app
       - ./static:/app/static
       - ./templates:/app/templates
 
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus:/etc/prometheus
-      - prometheus-data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--web.enable-lifecycle'
-    networks:
-      - app-network
-    depends_on:
-      - fastapi
-      - postgres-exporter
+  # prometheus:
+  #   image: prom/prometheus:v2.45.0
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./prometheus:/etc/prometheus
+  #     - prometheus-data:/prometheus
+  #   command:
+  #     - '--config.file=/etc/prometheus/prometheus.yml'
+  #     - '--storage.tsdb.path=/prometheus'
+  #     - '--web.console.libraries=/etc/prometheus/console_libraries'
+  #     - '--web.console.templates=/etc/prometheus/consoles'
+  #   networks:
+  #     - app-network
+  #   restart: unless-stopped
 
-  postgres-exporter:
-    image: prometheuscommunity/postgres-exporter:latest
-    ports:
-      - "9187:9187"
-    environment:
-      - DATA_SOURCE_NAME=postgresql://postgres:postgres123@postgres:5432/app_db?sslmode=disable
-    networks:
-      - app-network
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning
-    environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
-    networks:
-      - app-network
-    depends_on:
-      - prometheus
+  # postgres-exporter:
+  #   image: prometheuscommunity/postgres-exporter:v0.10.0
+  #   ports:
+  #     - "9187:9187"
+  #   environment:
+  #     - DATA_SOURCE_NAME=postgresql://postgres:postgres123@postgres:5432/app_db?sslmode=disable
+  #     - PG_EXPORTER_DISABLE_DEFAULT_METRICS=true
+  #     - PG_EXPORTER_DISABLE_SETTINGS_METRICS=true
+  #     - PG_EXPORTER_EXTEND_QUERY_PATH=/etc/postgres_exporter/queries.yaml
+  #   volumes:
+  #     - ./postgres_exporter:/etc/postgres_exporter
+  #   networks:
+  #     - app-network
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   restart: unless-stopped
 
 networks:
   app-network:
@@ -123,5 +130,5 @@ volumes:
   neo4j-data:
   neo4j-logs:
   postgres-data:
-  prometheus-data:
-  grafana-data:
+  pgadmin-data:
+  # prometheus-data:

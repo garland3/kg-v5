@@ -13,9 +13,13 @@
         <h1>Neo4j FastAPI Demo</h1>
         <div class="user-info">
             <p>Current User: {{ user_email }}</p>
+            {% if selected_project_name %}
+            <p>Current Project: {{ selected_project_name }}</p>
+            {% endif %}
         </div>
         <nav>
-            <a href="/">Manage People</a>
+            <a href="/">Project Management</a>
+            <a href="/people">Manage People</a>
             <a href="/visualize">Graph Visualization</a>
             <a href="/extract-kg">Extract Knowledge Graph</a>
             <a href="/deduplicate">Deduplicate Entities</a>

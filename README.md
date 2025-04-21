@@ -140,3 +140,36 @@ MATCH (p:Person {name: 'Alice Smith'}) RETURN p
 MATCH (p1:Person)-[r]->(p2:Person) 
 RETURN p1.name, type(r), p2.name
 ```
+
+## Monitoring
+
+The application includes monitoring capabilities using Prometheus:
+
+### Monitoring Services
+
+- **Prometheus** (http://localhost:9090)
+  - Collects metrics from the FastAPI application, Neo4j, and Postgres
+  - Provides a query interface for metrics data
+  - Stores time-series data for historical analysis
+
+- **Postgres Exporter** (http://localhost:9187/metrics)
+  - Exposes Postgres metrics for Prometheus to scrape
+  - Monitors database performance and health
+
+### Accessing Monitoring Tools
+
+After starting the application with `docker-compose up -d`, you can access:
+
+- **Prometheus UI**: [http://localhost:9090](http://localhost:9090)
+  - Use the query interface to explore metrics
+  - Check targets at [http://localhost:9090/targets](http://localhost:9090/targets) to ensure all services are being scraped
+  - View and query metrics using PromQL (Prometheus Query Language)
+
+### Available Metrics
+
+- Postgres database metrics:
+  - Database size
+  - Connection counts
+  - Transaction rates (commits/rollbacks)
+  - Query statistics
+- Neo4j metrics (via Prometheus scraping)

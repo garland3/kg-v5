@@ -7,16 +7,7 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
-  - job_name: 'fastapi'
-    metrics_path: '/metrics'
-    static_configs:
-      - targets: ['fastapi:8000']
-
-  - job_name: 'neo4j'
-    metrics_path: '/metrics'
-    static_configs:
-      - targets: ['neo4j:7474']
-
   - job_name: 'postgres'
+    metrics_path: '/metrics'
     static_configs:
       - targets: ['postgres-exporter:9187']

@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 if not os.getenv("OPENAI_API_KEY"):
     logger.warning("OPENAI_API_KEY environment variable not set. OpenAI calls will fail.")
+    raise ValueError("OPENAI_API_KEY is required.")
 
 # Get model from environment
 model = os.getenv("OPENAI_MODEL", "gpt-4")
@@ -81,13 +82,15 @@ class ProjectResponse(ProjectBase):
 # Define the input model for plain text requests
 class TextInput(BaseModel):
     text: str = Field(..., min_length=1, description="The raw text to process.")
-    project_id: Optional[int] = Field(None, description="Optional project ID to associate the knowledge graph with")
+    # project_id removed, will be passed as function argument
 
 # --- OpenAI Interaction ---
-async def extract_knowledge_graph_from_text(text: str) -> KnowledgeGraph:
+async def extract_knowledge_graph_from_text(text: str, project_id: Optional[int] = None) -> KnowledgeGraph: # Added project_id parameter
     """
     Extracts entities and relationships from text using OpenAI's API.
     Focuses ONLY on entities of type 'Person'.
+    The project_id is currently not used in the extraction logic itself,
+    but is accepted for consistency with the calling routes.
     """
     logger.info(f"Extracting KG from text (length: {len(text)})...")
 

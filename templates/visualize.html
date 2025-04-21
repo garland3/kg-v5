@@ -26,6 +26,9 @@
             <li>Click on a node to see its details</li>
         </ul>
     </div>
+    
+    <!-- Hidden input to store project ID -->
+    <input type="hidden" id="projectId" value="{{ selected_project_id }}">
 
 {% endblock %}
 
@@ -38,6 +41,20 @@
 
         // API base URL
         const API_BASE_URL = '/api';
+        // Get project ID from hidden input element
+        const projectIdElement = document.getElementById('projectId');
+        const PROJECT_ID = projectIdElement && projectIdElement.value && !isNaN(parseInt(projectIdElement.value)) ? parseInt(projectIdElement.value) : null;
+
+        // Helper to construct URL with project ID if available
+        function getApiUrl(endpoint) {
+            let url = `${API_BASE_URL}${endpoint}`;
+            if (PROJECT_ID !== null) {
+                // Check if endpoint already has query params
+                url += url.includes('?') ? '&' : '?';
+                url += `project_id=${PROJECT_ID}`;
+            }
+            return url;
+        }
 
         // Show message
         function showMessage(message, type) {
@@ -50,9 +67,16 @@
 
         // Load and visualize the graph
         async function loadGraph() {
+             if (PROJECT_ID === null) {
+                showMessage('Please select a project to view the graph.', 'info');
+                graphContainer.innerHTML = '<p style="text-align: center; margin-top: 20px;">No project selected.</p>';
+                return;
+            }
             try {
-                // Get all people using the non-paginated endpoint
-                const peopleResponse = await fetch(`${API_BASE_URL}/people/all/`);
+                // Get all people using the non-paginated endpoint for the specific project
+                const peopleUrl = getApiUrl('/people/all/'); // Use helper
+                const peopleResponse = await fetch(peopleUrl); 
+                if (!peopleResponse.ok) throw new Error(`HTTP error! status: ${peopleResponse.status}`);
                 const people = await peopleResponse.json();
                 
                 // Create nodes array
@@ -77,40 +101,45 @@
                 // Create edges array
                 const edges = new vis.DataSet();
                 
-                // For each person, get their relationships
+                // For each person, get their relationships for the specific project
                 for (const person of people) {
                     try {
-                        const relResponse = await fetch(`${API_BASE_URL}/people/${person.id}/relationships`);
+                        const relUrl = getApiUrl(`/people/${person.id}/relationships`); // Use helper
+                        const relResponse = await fetch(relUrl); 
+                        if (!relResponse.ok) {
+                             console.error(`Failed to fetch relationships for person ${person.id}: ${relResponse.status}`);
+                             continue; // Skip this person if relationships fail
+                        }
                         const relationships = await relResponse.json();
                         
                         // Add edges for each relationship
                         relationships.forEach(rel => {
-                            const edgeId = [person.id, rel.related_person_id].sort().join('-');
-                            if (!edges.get(edgeId)) {
-                                edges.add({
-                                    id: edgeId,
-                                    from: person.id,
-                                    to: rel.related_person_id,
-                                    label: rel.relationship_type,
-                                    arrows: {
-                                        to: {
-                                            enabled: true,
-                                            type: 'arrow'
+                            // Ensure both source and target nodes exist in our current nodes dataset
+                            if (nodes.get(person.id) && nodes.get(rel.related_person_id)) {
+                                const edgeId = [person.id, rel.related_person_id].sort().join('-'); // Simple ID generation
+                                if (!edges.get(edgeId)) { // Avoid duplicate edges if relationship is bidirectional in data
+                                    edges.add({
+                                        id: edgeId,
+                                        from: person.id,
+                                        to: rel.related_person_id,
+                                        label: rel.relationship_type,
+                                        arrows: {
+                                            to: {
+                                                enabled: true,
+                                                type: 'arrow'
+                                            }
+                                            // Removed 'from' arrow assuming relationships are directed in source data
                                         },
-                                        from: {
-                                            enabled: true,
-                                            type: 'arrow'
+                                        color: {
+                                            color: '#e74c3c',
+                                            highlight: '#c0392b'
+                                        },
+                                        font: {
+                                            align: 'middle',
+                                            size: 10
                                         }
-                                    },
-                                    color: {
-                                        color: '#e74c3c',
-                                        highlight: '#c0392b'
-                                    },
-                                    font: {
-                                        align: 'middle',
-                                        size: 10
-                                    }
-                                });
+                                    });
+                                }
                             }
                         });
                     } catch (error) {
@@ -156,6 +185,7 @@
             } catch (error) {
                 console.error('Error loading graph:', error);
                 showMessage('Error loading graph', 'error');
+                graphContainer.innerHTML = '<p style="text-align: center; margin-top: 20px; color: red;">Error loading graph.</p>';
             }
         }
 
